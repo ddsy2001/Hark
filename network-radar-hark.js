@@ -29,13 +29,22 @@ const clean = (v) => String(v == null ? '' : v).trim();
 async function diagnose(ctx, large) {
   const env = ctx.env || {};
   const policy = clean(env.POLICY);
-  const mask = clean(env.YS) !== '0';
+  const mask = !/^(0|false|否|显示)$/i.test(clean(env.YS));
   const rawTimeout = Number(env.TIMEOUT);
   const timeout = Number.isFinite(rawTimeout) && rawTimeout > 0
     ? Math.min(10000, Math.max(1000, rawTimeout)) : 4500;
-  const requested = clean(env.SERVICES).toLowerCase();
+  const PRESETS = {
+    '推荐': DEFAULTS,
+    '流媒体': ['netflix', 'youtube', 'disney', 'spotify', 'tiktok', 'prime'],
+    'ai': ['chatgpt', 'claude', 'gemini', 'deepseek', 'grok', 'perplexity'],
+    '全部': Object.keys(CATALOG),
+  };
+  const custom = clean(env.SERVICES_CUSTOM).toLowerCase();
+  const pick = clean(env.SERVICES).toLowerCase();
+  const presetKey = Object.keys(PRESETS).find((k) => pick === k || pick.startsWith(k));
+  const requested = custom || (large && presetKey ? '' : presetKey ? PRESETS[presetKey].join(',') : pick);
   const ids = requested
-    ? [...new Set(requested.split(/[,，]/).map(clean))]
+    ? [...new Set(requested.split(/[,，\s]+/).map(clean))]
         .filter((id) => Object.prototype.hasOwnProperty.call(CATALOG, id)).slice(0, large ? 12 : 8)
     : (large ? Object.keys(CATALOG) : DEFAULTS);
   const cache = new Map();
@@ -409,6 +418,15 @@ function catCard(title, sym, symColor, list) {
   ], { flex: 1, gap: 5, padding: 8 });
 }
 
+function msPair(e) {
+  if (!e.alive) return [e.msText, ''];
+  return e.ms >= 1000 ? [(e.ms / 1000).toFixed(e.ms >= 10000 ? 0 : 1), 's'] : [String(e.ms), 'ms'];
+}
+function msNode(e, size) {
+  const [v, u] = msPair(e);
+  return row([T(v, size, e.msColor, 'bold'), ...(u ? [T(u, 8, C.dim, 'medium')] : [])], { alignItems: 'end', gap: 1 });
+}
+
 function pureColor(p) { return !p ? '#8E8E93' : p.score >= 75 ? C.ok : p.score >= 45 ? C.warn : C.fail; }
 
 function buildLarge(d) {
@@ -499,25 +517,28 @@ function buildLarge(d) {
 }
 
 // 服务竖排小格：品牌方块 + 状态（中/小号用）
-function svcMini(s, size) {
+function svcMini(s, size, named) {
   return col([
     brandTile(s.id, size, !s.ok),
-    T(s.ok ? 'OK' : s.short, 8, s.ok ? C.ok : s.color, 'bold'),
+    named
+      ? T(s.ok ? s.name : `${s.name} ${s.short}`, 8, s.ok ? C.dim : s.color, 'semibold', { minScale: 0.5 })
+      : T(s.ok ? 'OK' : s.short, 8, s.ok ? C.ok : s.color, 'bold'),
   ], { alignItems: 'center', gap: 2, flex: 1 });
 }
 
-function exitBlock(e, title, sym, tint, tag) {
+function exitBlock(e, title, sym, tint, tag, sub) {
+  const tagNode = tag && typeof tag === 'object' ? tag : T(tag || '', 9, C.dim, 'medium', { minScale: 0.7 });
   return glass([
-    row([icon(sym, tint, 10), T(title, 10, C.text, 'bold'), spacer(), T(tag, 9, C.dim, 'medium', { minScale: 0.7 })], { gap: 3 }),
+    row([icon(sym, tint, 10), T(title, 10, C.text, 'bold'), spacer(), tagNode], { gap: 3, height: 16 }),
     row([
       T(flag(e.loc) || '🌐', 18, C.text),
       col([
-        T(e.city || e.loc || '地区未知', 11, C.text, 'semibold'),
-        T(e.isp || e.ip, 8, C.faint),
+        T(e.city || e.loc || '地区未知', 12, C.text, 'semibold'),
+        T(sub || e.isp || e.ip, 8, C.faint),
       ], { gap: 0, flex: 1 }),
-      row([T(e.msText, 16, e.msColor, 'bold'), ...(e.alive ? [T('ms', 8, C.dim, 'medium')] : [])], { alignItems: 'end', gap: 1 }),
+      msNode(e, 17),
     ], { gap: 5 }),
-  ], { flex: 1, gap: 4, padding: [7, 9], borderRadius: 14 });
+  ], { flex: 1, gap: 4, padding: [6, 9], borderRadius: 14 });
 }
 
 function miniHeader(d, title, withPolicy) {
@@ -545,7 +566,7 @@ function buildSmall(d) {
         tile(T(flag(e.loc) || '🌐', 18, C.text), { light: '#BF5AF21A', dark: '#BF5AF22E' }, 34),
         col([
           T(e.city || e.loc || '--', 12, C.text, 'semibold'),
-          row([T(e.msText, 18, e.msColor, 'bold'), ...(e.alive ? [T('ms', 8, C.dim, 'medium')] : [])], { alignItems: 'end', gap: 1 }),
+          msNode(e, 18),
         ], { gap: 0, flex: 1 }),
         col([
           { type: 'image', src: gaugeSvg(d.pure ? d.pure.score / 100 : 0, pureColor(d.pure), 80), width: 38, height: 21 },
@@ -555,7 +576,7 @@ function buildSmall(d) {
       spacer(),
       { type: 'stack', direction: 'row', gap: 2, children: list.map((x) => svcMini(x, 18)) },
       spacer(),
-      T(`直连 ${d.direct.msText}${d.direct.alive ? 'ms' : ''} · ${d.direct.city || netName(d)}`, 9, C.dim),
+      T(`直连 ${msPair(d.direct).join('')} · ${d.direct.city || netName(d)}`, 9, C.dim),
     ],
   };
 }
@@ -563,15 +584,17 @@ function buildSmall(d) {
 function buildMedium(d) {
   const list = d.services.slice(0, 8);
   return {
-    type: 'widget', padding: 12, gap: 7, backgroundGradient: bg(),
+    type: 'widget', padding: 12, gap: 6, backgroundGradient: bg(),
     children: [
       miniHeader(d, '网络诊断雷达', true),
-      { type: 'stack', direction: 'row', gap: 8, height: 58, children: [
+      { type: 'stack', direction: 'row', gap: 8, height: 60, children: [
         exitBlock(d.direct, '本地网络', d.onWifi ? 'wifi' : 'antenna.radiowaves.left.and.right', C.accent, netName(d)),
-        exitBlock(d.selected, '当前代理', 'point.3.connected.trianglepath.dotted', '#BF5AF2', d.pure ? `纯净 ${d.pure.score} · ${d.pure.level}` : `${summary(d).ok}/${summary(d).total} 可访问`),
+        exitBlock(d.selected, '当前代理', 'point.3.connected.trianglepath.dotted', '#BF5AF2',
+          d.pure ? pill(`纯净 ${d.pure.score} · ${d.pure.level}`, pureColor(d.pure)) : `${summary(d).ok}/${summary(d).total} 可访问`,
+          d.pure ? `${d.pure.kind} · ${d.selected.isp || d.selected.ip}` : ''),
       ] },
       list.length
-        ? { type: 'stack', direction: 'row', gap: 4, padding: [5, 6], borderRadius: 14, backgroundColor: C.glass, children: list.map((x) => svcMini(x, 22)) }
+        ? { type: 'stack', direction: 'row', gap: 3, padding: [6, 5], borderRadius: 14, backgroundColor: C.glass, children: list.map((x) => svcMini(x, 22, true)) }
         : T('SERVICES 中没有有效服务名', 11, C.warn),
     ],
   };
