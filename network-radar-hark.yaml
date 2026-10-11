@@ -25,6 +25,10 @@ env_schema:
     name: 超时（毫秒）
     description: 单次请求超时，1000~10000
     default_value: '4500'
+  PROXYCHECK_KEY:
+    name: proxycheck.io Key
+    description: 可选。IP 纯净度来自 proxycheck.io，免 Key 每天 100 次（脚本同一 IP 缓存 6 小时），填免费 Key 可到 1000 次
+    default_value: ''
 scriptings:
 - generic:
     name: 网络诊断-Hark
