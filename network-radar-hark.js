@@ -26,7 +26,7 @@ const DEFAULTS = ['netflix', 'youtube', 'chatgpt', 'claude', 'gemini', 'perplexi
 
 const clean = (v) => String(v == null ? '' : v).trim();
 
-async function diagnose(ctx) {
+async function diagnose(ctx, large) {
   const env = ctx.env || {};
   const policy = clean(env.POLICY);
   const mask = clean(env.YS) !== '0';
@@ -36,8 +36,8 @@ async function diagnose(ctx) {
   const requested = clean(env.SERVICES).toLowerCase();
   const ids = requested
     ? [...new Set(requested.split(/[,，]/).map(clean))]
-        .filter((id) => Object.prototype.hasOwnProperty.call(CATALOG, id)).slice(0, 8)
-    : DEFAULTS;
+        .filter((id) => Object.prototype.hasOwnProperty.call(CATALOG, id)).slice(0, large ? 12 : 8)
+    : (large ? Object.keys(CATALOG) : DEFAULTS);
   const cache = new Map();
 
   function request(url, route = '', body = false) {
@@ -75,17 +75,30 @@ async function diagnose(ctx) {
     return { ip: shown, loc: data.loc || '', ok: true, v6: ip.includes(':') };
   }
 
+  // 出口归属（城市 / ISP / ASN），仅大号查询
+  async function geo(route) {
+    if (!large) return {};
+    const r = await request('https://ipwho.is/?lang=zh-CN', route, true);
+    try {
+      const j = JSON.parse(r.text || '{}');
+      if (!j.success) return {};
+      const conn = j.connection || {};
+      return { city: j.city || j.region || '', country: j.country || '', isp: conn.isp || conn.org || '', asn: conn.asn ? `AS${conn.asn}` : '' };
+    } catch (_) { return {}; }
+  }
+
   const jobs = ids.map(async (id) => {
     const [name, url, cat, sym] = CATALOG[id];
     const route = policy || clean(env[cat]);
-    const r = await request(url, route);
-    return { id, name, sym, route, ...classify(r) };
+    const [r, e] = await Promise.all([request(url, route), exit(route)]);
+    return { id, name, sym, cat, route, loc: e.loc || '', ...classify(r) };
   });
-  const [directIP, selectedIP, directTime, selectedTime, services] = await Promise.all([
+  const [directIP, selectedIP, directTime, selectedTime, services, directGeo, selectedGeo] = await Promise.all([
     exit('DIRECT'), exit(policy),
     request('https://www.qq.com/favicon.ico', 'DIRECT'),
     request('https://cp.cloudflare.com/generate_204', policy),
     Promise.all(jobs),
+    geo('DIRECT'), geo(policy),
   ]);
 
   const device = ctx.device || {};
@@ -94,8 +107,8 @@ async function diagnose(ctx) {
   const dns = Array.isArray(device.dnsServers) ? device.dnsServers.filter(Boolean) : [];
   return {
     policy, mask, ids, services, network, onWifi, dns,
-    direct: { ...directIP, ...latency(directTime) },
-    selected: { ...selectedIP, ...latency(selectedTime) },
+    direct: { ...directIP, ...latency(directTime), ...directGeo },
+    selected: { ...selectedIP, ...latency(selectedTime), ...selectedGeo },
   };
 }
 
@@ -323,41 +336,176 @@ function buildMedium(d) {
   };
 }
 
+/* ---------- 大号：雷达仪表盘 ---------- */
+
+// 品牌小方块：字母或 SF 图标
+const BRAND = {
+  netflix: { bg: '#E50914', t: 'N' },
+  youtube: { bg: '#FF0000', s: 'play.fill' },
+  disney: { bg: '#113CCF', t: 'D+' },
+  spotify: { bg: '#1DB954', s: 'dot.radiowaves.left.and.right' },
+  tiktok: { bg: '#111111', s: 'music.note' },
+  prime: { bg: '#00A8E1', s: 'play.rectangle.fill' },
+  chatgpt: { bg: '#10A37F', s: 'circle.hexagongrid.fill' },
+  claude: { bg: '#D97757', t: 'AI' },
+  gemini: { bg: '#4285F4', s: 'sparkles' },
+  deepseek: { bg: '#4D6BFE', t: 'D' },
+  grok: { bg: '#222222', s: 'xmark' },
+  perplexity: { bg: '#1F8A8A', s: 'magnifyingglass' },
+};
+
+function gaugeSvg(pct, color, w) {
+  const stroke = 10, r = (w - stroke) / 2, cx = w / 2, cy = w / 2, h = w / 2 + stroke / 2;
+  const p = Math.max(0, Math.min(1, Number(pct) || 0));
+  const pt = (a) => [(cx - r * Math.cos(a)).toFixed(2), (cy - r * Math.sin(a)).toFixed(2)];
+  const [x0, y0] = pt(0), [x1, y1] = pt(Math.PI), [xp, yp] = pt(Math.PI * p);
+  let body = `<path d='M ${x0} ${y0} A ${r} ${r} 0 0 1 ${x1} ${y1}' fill='none' stroke='${color}' stroke-opacity='0.2' stroke-width='${stroke}' stroke-linecap='round'/>`;
+  if (p > 0.005) body += `<path d='M ${x0} ${y0} A ${r} ${r} 0 0 1 ${xp} ${yp}' fill='none' stroke='${color}' stroke-width='${stroke}' stroke-linecap='round'/>`;
+  return svgUri(`<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 ${w} ${h}'>${body}</svg>`);
+}
+
+function tile(child, color, size) {
+  return { type: 'stack', width: size, height: size, borderRadius: size * 0.3, backgroundColor: color, alignItems: 'center', justifyContent: 'center', direction: 'row', children: [child] };
+}
+
+function brandTile(id, size) {
+  const b = BRAND[id] || { bg: '#8E8E93', t: '?' };
+  const inner = b.t
+    ? T(b.t, b.t.length > 1 ? size * 0.4 : size * 0.52, '#FFFFFF', 'heavy', { minScale: 0.5 })
+    : icon(b.s, '#FFFFFF', size * 0.52);
+  return tile(inner, b.bg, size);
+}
+
+function pill(text, color) {
+  return { type: 'stack', direction: 'row', padding: [2, 6], borderRadius: 8, backgroundColor: color + '26', children: [T(text, 9, color, 'semibold')] };
+}
+
+// 卡片底部的小指标：图标+标题 / 数值
+function stat(sym, label, value, color) {
+  return col([
+    row([icon(sym, C.dim, 8), T(label, 8, C.dim, 'medium')], { gap: 2 }),
+    T(value, 10, color || C.text, 'semibold'),
+  ], { alignItems: 'center', gap: 1, flex: 1 });
+}
+
+function svcTile(s) {
+  const st = s.ok ? 'OK' : s.short;
+  return {
+    type: 'stack', direction: 'row', alignItems: 'center', gap: 5, flex: 1,
+    padding: [4, 5], borderRadius: 10, backgroundColor: C.glass,
+    children: [
+      brandTile(s.id, 22),
+      col([
+        T(s.name, 10, C.text, 'semibold', { minScale: 0.7 }),
+        row([
+          T(s.loc ? `${flag(s.loc)} ${s.loc}` : '--', 8, C.dim, 'medium'),
+          T(st, 8, s.ok ? C.ok : s.color, 'bold'),
+        ], { gap: 3 }),
+      ], { gap: 1 }),
+      spacer(),
+    ],
+  };
+}
+
+function catCard(title, sym, symColor, list) {
+  const ok = list.filter((x) => x.ok).length;
+  const color = !list.length ? '#8E8E93' : ok === list.length ? C.ok : ok === 0 ? C.fail : C.warn;
+  const items = list.slice(0, 6);
+  const rows = [];
+  for (let i = 0; i < 6; i += 2) {
+    const a = items[i], b = items[i + 1];
+    rows.push({ type: 'stack', direction: 'row', gap: 5, height: 34, children: [
+      a ? svcTile(a) : { type: 'stack', flex: 1, children: [] },
+      b ? svcTile(b) : { type: 'stack', flex: 1, children: [] },
+    ] });
+  }
+  return glass([
+    row([icon(sym, symColor, 12), T(title, 12, C.text, 'bold'), spacer(), pill(`${ok}/${list.length}`, color)]),
+    ...(list.length ? rows : [T('未选择该类站点', 10, C.dim)]),
+  ], { flex: 1, gap: 5, padding: 8 });
+}
+
 function buildLarge(d) {
   const s = summary(d);
-  const dnsText = d.mask ? `${d.dns.length} 个（地址隐藏）` : (d.dns.slice(0, 2).join(' / ') || '未获取');
+  const now = new Date();
+  const week = '日一二三四五六'[now.getDay()];
+  const date = `${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')} 周${week}`;
+  const lmt = d.services.filter((x) => x.cat === 'LMT');
+  const ai = d.services.filter((x) => x.cat === 'AI');
+  const pct = s.total ? s.ok / s.total : 0;
+  const gColor = pct >= 0.99 ? C.ok : pct >= 0.5 ? C.warn : C.fail;
+  const dnsText = d.mask ? `${d.dns.length} 个` : (d.dns[0] || '--');
+  const proxyOk = d.selected.alive;
+
+  const headerRow = row([
+    tile(icon('waveform.path.ecg', C.accent, 16), { light: '#0A84FF1F', dark: '#0A84FF33' }, 30),
+    col([
+      row([T('网络诊断雷达', 14, C.text, 'bold'), pill('Hark', '#BF5AF2')], { gap: 4 }),
+      T('Egern · 全面网络状态检测', 8, C.dim),
+    ], { gap: 1 }),
+    spacer(),
+    col([T('当前策略', 7, C.dim), row([icon('scope', C.accent, 9), T(routeName(d), 10, C.text, 'semibold')], { gap: 2 })], { gap: 1 }),
+    col([T(hhmm(), 15, C.text, 'bold'), T(date, 8, C.dim)], { gap: 0, alignItems: 'end' }),
+  ], { gap: 8, height: 32 });
+
+  const localCard = glass([
+    row([icon(d.onWifi ? 'wifi' : 'antenna.radiowaves.left.and.right', C.accent, 11), T('本地网络', 12, C.text, 'bold'), spacer(), pill(d.direct.alive ? '已连接' : '异常', d.direct.alive ? C.ok : C.fail)]),
+    row([
+      tile(icon(d.onWifi ? 'wifi' : 'antenna.radiowaves.left.and.right', C.accent, 20), { light: '#0A84FF1A', dark: '#0A84FF2E' }, 38),
+      col([
+        T(netName(d), 11, C.text, 'semibold'),
+        T(`${flag(d.direct.loc)} ${d.direct.city || d.direct.loc || '地区未知'}`, 10, C.dim),
+        T(d.direct.isp || d.direct.ip, 9, C.faint),
+      ], { gap: 1, flex: 1 }),
+    ], { gap: 6 }),
+    row([
+      stat('clock', '直连延迟', d.direct.alive ? `${d.direct.ms}ms` : d.direct.msText, d.direct.msColor),
+      stat('globe', 'IP 类型', d.direct.v6 ? 'IPv6' : 'IPv4'),
+      stat('server.rack', 'DNS', dnsText),
+    ], { gap: 2 }),
+  ], { flex: 1, gap: 5, padding: 8 });
+
+  const proxyCard = glass([
+    row([icon('point.3.connected.trianglepath.dotted', '#BF5AF2', 11), T('当前代理', 12, C.text, 'bold'), spacer(), pill(proxyOk ? '连接正常' : '连接异常', proxyOk ? C.ok : C.fail)]),
+    row([
+      tile(T(flag(d.selected.loc) || '🌐', 20, C.text), { light: '#BF5AF21A', dark: '#BF5AF22E' }, 38),
+      col([
+        T(`${flag(d.selected.loc)} ${d.selected.city || d.selected.loc || '--'}`, 10, C.text, 'semibold'),
+        T(d.selected.isp || d.selected.ip, 9, C.dim),
+        T(d.selected.asn || d.selected.ip, 8, C.faint),
+      ], { gap: 1, flex: 1 }),
+      col([
+        { type: 'image', src: gaugeSvg(pct, gColor, 80), width: 52, height: 29 },
+        T(`${Math.round(pct * 100)}%`, 11, gColor, 'bold'),
+      ], { alignItems: 'center', gap: 0 }),
+    ], { gap: 6 }),
+    row([
+      stat('clock', '延迟', d.selected.alive ? `${d.selected.ms}ms` : d.selected.msText, d.selected.msColor),
+      stat('checkmark.seal', '可访问', `${s.ok}/${s.total}`, s.color),
+      stat('paperplane', '策略', routeName(d)),
+    ], { gap: 2 }),
+  ], { flex: 1, gap: 5, padding: 8 });
+
+  const foot = (sym, color, label, value, vColor) => row([
+    icon(sym, color, 13),
+    col([T(label, 7, C.dim), T(value, 9, vColor || C.text, 'semibold')], { gap: 0 }),
+  ], { gap: 4, flex: 1 });
+
   return {
-    type: 'widget', padding: 14, gap: 8, backgroundGradient: bg(),
+    type: 'widget', padding: 12, gap: 7, backgroundGradient: bg(),
     children: [
-      header(d),
-      {
-        type: 'stack', direction: 'row', gap: 10, alignItems: 'center', height: 80,
-        children: [
-          {
-            type: 'stack', direction: 'column', alignItems: 'center', gap: 2, width: 76,
-            children: [
-              { type: 'image', src: segRingSvg(d.services, 120, 14), width: 56, height: 56 },
-              row([T(`${s.ok}/${s.total}`, 13, s.color, 'bold'), T('可访问', 9, C.dim, 'medium')], { gap: 3, alignItems: 'end' }),
-            ],
-          },
-          glass([
-            row([icon(d.onWifi ? 'wifi' : 'antenna.radiowaves.left.and.right', C.accent, 11), T(netName(d), 11, C.text, 'semibold'), spacer(), T(routeName(d), 10, C.dim)]),
-            row([T('直连出口', 10, C.dim), spacer(), T(`${d.direct.ip} · ${locText(d.direct)}`, 10, C.text, 'medium')]),
-            row([T('所选出口', 10, C.dim), spacer(), T(`${d.selected.ip} · ${locText(d.selected)}`, 10, C.text, 'medium')]),
-            row([T('设备 DNS', 10, C.dim), spacer(), T(dnsText, 10, C.text, 'medium')]),
-          ], { flex: 1, gap: 4, padding: [8, 10] }),
-        ],
-      },
-      {
-        type: 'stack', direction: 'row', gap: 10, height: 58,
-        children: [
-          exitCard('直连延迟', 'house.fill', C.teal, d.direct, { big: 18, tag: 'qq.com' }),
-          exitCard('所选延迟', 'paperplane.fill', C.accent, d.selected, { big: 18, tag: 'cloudflare' }),
-        ],
-      },
-      d.services.length ? serviceGrid(d.services, 2, 24, 5) : T('SERVICES 中没有有效服务名', 11, C.warn),
-      spacer(),
-      T('网页可访问 ≠ 服务解锁；耗时为 HTTP 响应，非 Ping', 9, C.faint),
+      headerRow,
+      { type: 'stack', direction: 'row', gap: 8, height: 100, children: [localCard, proxyCard] },
+      { type: 'stack', direction: 'row', gap: 8, height: 150, children: [
+        catCard('流媒体解锁', 'play.rectangle.fill', '#0A84FF', lmt),
+        catCard('AI 解锁检测', 'sparkles', '#BF5AF2', ai),
+      ] },
+      { type: 'stack', direction: 'row', gap: 6, height: 26, padding: [0, 4], children: [
+        foot('server.rack', C.accent, 'ISP / 厂商', d.selected.isp || '--', C.accent),
+        foot('number', C.warn, 'ASN', d.selected.asn || '--', C.warn),
+        foot('checkmark.shield.fill', C.ok, '可访问率', `${Math.round(pct * 100)}%`, gColor),
+        foot('arrow.clockwise', C.accent, '更新时间', hhmm(), C.accent),
+      ] },
     ],
   };
 }
@@ -394,8 +542,8 @@ function buildLock(d, family) {
 }
 
 export default async function (ctx) {
-  const d = await diagnose(ctx);
   const family = ctx.widgetFamily || 'systemLarge';
+  const d = await diagnose(ctx, family === 'systemLarge' || family === 'systemExtraLarge');
   if (family.startsWith('accessory')) return buildLock(d, family);
   if (family === 'systemSmall') return buildSmall(d);
   if (family === 'systemMedium') return buildMedium(d);
