@@ -72,7 +72,7 @@ async function diagnose(ctx, large) {
     if (!ip) return { ip: '未获取', loc: data.loc || '', ok: false };
     const hidden = ip.includes(':') ? 'IPv6 已隐藏' : ip.replace(/^(\d+\.\d+)\.\d+\.\d+$/, '$1.*.*');
     const shown = mask ? (hidden === ip ? 'IP 已隐藏' : hidden) : ip;
-    return { ip: shown, loc: data.loc || '', ok: true, v6: ip.includes(':') };
+    return { ip: shown, rawIp: ip, loc: data.loc || '', ok: true, v6: ip.includes(':') };
   }
 
   // 出口归属（城市 / ISP / ASN），仅大号查询
@@ -100,12 +100,44 @@ async function diagnose(ctx, large) {
     geo('DIRECT'), geo(policy),
   ]);
 
+  // IP 纯净度：proxycheck.io（风险分 + 类型），同一 IP 缓存 6 小时省额度
+  async function purity(ip) {
+    if (!ip) return null;
+    const ckey = 'radar_purity';
+    try {
+      const c = ctx.storage && ctx.storage.getJSON(ckey);
+      if (c && c.ip === ip && Date.now() - c.ts < 6 * 3600000) return c.p;
+    } catch (_) {}
+    const k = clean(env.PROXYCHECK_KEY);
+    const url = `https://proxycheck.io/v2/${encodeURIComponent(ip)}?vpn=1&risk=1${k ? '&key=' + encodeURIComponent(k) : ''}`;
+    const r = await request(url, policy, true);
+    try {
+      const j = JSON.parse(r.text || '{}');
+      const x = j[ip];
+      if (!x || x.risk == null) return null;
+      const risk = Number(x.risk) || 0;
+      const proxy = x.proxy === 'yes';
+      const type = String(x.type || '');
+      let score = 100 - risk - (proxy ? 10 : 0);
+      if (/hosting|business/i.test(type)) score -= 5;
+      score = Math.max(0, Math.min(100, Math.round(score)));
+      const kind = /residential/i.test(type) ? '住宅 IP' : /wireless/i.test(type) ? '移动网络'
+        : /hosting|business/i.test(type) ? '数据中心' : /vpn/i.test(type) ? 'VPN' : (type || '未知');
+      const level = score >= 75 ? '低风险' : score >= 45 ? '中风险' : '高风险';
+      const p = { score, risk, proxy, kind, level };
+      try { ctx.storage && ctx.storage.setJSON(ckey, { ip, ts: Date.now(), p }); } catch (_) {}
+      return p;
+    } catch (_) { return null; }
+  }
+  const pure = await purity(selectedIP.rawIp);
+  delete directIP.rawIp; delete selectedIP.rawIp;
+
   const device = ctx.device || {};
   const network = clean((device.wifi || {}).ssid) || clean((device.cellular || {}).carrier) || '';
   const onWifi = !!clean((device.wifi || {}).ssid);
   const dns = Array.isArray(device.dnsServers) ? device.dnsServers.filter(Boolean) : [];
   return {
-    policy, mask, ids, services, network, onWifi, dns,
+    policy, mask, ids, services, network, onWifi, dns, pure,
     direct: { ...directIP, ...latency(directTime), ...directGeo },
     selected: { ...selectedIP, ...latency(selectedTime), ...selectedGeo },
   };
@@ -377,6 +409,8 @@ function catCard(title, sym, symColor, list) {
   ], { flex: 1, gap: 5, padding: 8 });
 }
 
+function pureColor(p) { return !p ? '#8E8E93' : p.score >= 75 ? C.ok : p.score >= 45 ? C.warn : C.fail; }
+
 function buildLarge(d) {
   const s = summary(d);
   const now = new Date();
@@ -427,8 +461,9 @@ function buildLarge(d) {
         T(d.selected.asn || d.selected.ip, 8, C.faint),
       ], { gap: 1, flex: 1 }),
       col([
-        { type: 'image', src: gaugeSvg(pct, gColor, 80), width: 52, height: 29 },
-        T(`${Math.round(pct * 100)}%`, 11, gColor, 'bold'),
+        { type: 'image', src: gaugeSvg(d.pure ? d.pure.score / 100 : 0, pureColor(d.pure), 80), width: 46, height: 26 },
+        T(d.pure ? String(d.pure.score) : '--', 11, pureColor(d.pure), 'bold'),
+        T('纯净评分', 7, C.dim),
       ], { alignItems: 'center', gap: 0 }),
     ], { gap: 6 }),
     row([
@@ -447,15 +482,16 @@ function buildLarge(d) {
     type: 'widget', padding: 12, gap: 7, backgroundGradient: bg(),
     children: [
       headerRow,
-      { type: 'stack', direction: 'row', gap: 8, height: 100, children: [localCard, proxyCard] },
+      { type: 'stack', direction: 'row', gap: 8, height: 106, children: [localCard, proxyCard] },
       { type: 'stack', direction: 'row', gap: 8, height: 150, children: [
         catCard('流媒体解锁', 'play.rectangle.fill', '#0A84FF', lmt),
         catCard('AI 解锁检测', 'sparkles', '#BF5AF2', ai),
       ] },
       { type: 'stack', direction: 'row', gap: 6, height: 26, padding: [0, 4], children: [
         foot('server.rack', C.accent, 'ISP / 厂商', d.selected.isp || '--', C.accent),
-        foot('number', C.warn, 'ASN', d.selected.asn || '--', C.warn),
-        foot('checkmark.shield.fill', C.ok, '可访问率', `${Math.round(pct * 100)}%`, gColor),
+        foot('house.fill', C.warn, '属性类型', d.pure ? d.pure.kind : '--', C.warn),
+        foot('checkmark.shield.fill', pureColor(d.pure), '纯净评分', d.pure ? `${d.pure.score} 分` : '--', pureColor(d.pure)),
+        foot('shield.lefthalf.filled', pureColor(d.pure), '风险等级', d.pure ? d.pure.level : '--', pureColor(d.pure)),
         foot('arrow.clockwise', C.accent, '更新时间', hhmm(), C.accent),
       ] },
     ],
@@ -512,8 +548,8 @@ function buildSmall(d) {
           row([T(e.msText, 18, e.msColor, 'bold'), ...(e.alive ? [T('ms', 8, C.dim, 'medium')] : [])], { alignItems: 'end', gap: 1 }),
         ], { gap: 0, flex: 1 }),
         col([
-          { type: 'image', src: gaugeSvg(pct, gColor, 80), width: 38, height: 21 },
-          T(`${s.ok}/${s.total}`, 9, gColor, 'bold'),
+          { type: 'image', src: gaugeSvg(d.pure ? d.pure.score / 100 : 0, pureColor(d.pure), 80), width: 38, height: 21 },
+          T(d.pure ? `纯净 ${d.pure.score}` : '纯净 --', 9, pureColor(d.pure), 'bold'),
         ], { alignItems: 'center', gap: 0 }),
       ], { gap: 6 }),
       spacer(),
@@ -532,7 +568,7 @@ function buildMedium(d) {
       miniHeader(d, '网络诊断雷达', true),
       { type: 'stack', direction: 'row', gap: 8, height: 58, children: [
         exitBlock(d.direct, '本地网络', d.onWifi ? 'wifi' : 'antenna.radiowaves.left.and.right', C.accent, netName(d)),
-        exitBlock(d.selected, '当前代理', 'point.3.connected.trianglepath.dotted', '#BF5AF2', `${summary(d).ok}/${summary(d).total} 可访问`),
+        exitBlock(d.selected, '当前代理', 'point.3.connected.trianglepath.dotted', '#BF5AF2', d.pure ? `纯净 ${d.pure.score} · ${d.pure.level}` : `${summary(d).ok}/${summary(d).total} 可访问`),
       ] },
       list.length
         ? { type: 'stack', direction: 'row', gap: 4, padding: [5, 6], borderRadius: 14, backgroundColor: C.glass, children: list.map((x) => svcMini(x, 22)) }
