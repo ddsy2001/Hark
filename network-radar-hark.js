@@ -526,6 +526,26 @@ function svcMini(s, size, named) {
   ], { alignItems: 'center', gap: 2, flex: 1 });
 }
 
+function svcChip(s) {
+  return row([
+    brandTile(s.id, 16, !s.ok),
+    T(s.name, 10, s.ok ? C.text : C.dim, 'semibold', { minScale: 0.6 }),
+    spacer(),
+    T(s.ok ? 'OK' : s.short, 9, s.ok ? C.ok : s.color, 'bold', { minScale: 0.7 }),
+  ], { gap: 4, padding: [3, 6, 3, 4], borderRadius: 9, backgroundColor: C.glass, flex: 1, height: 22 });
+}
+
+function svcGrid(list) {
+  const per = Math.min(4, Math.ceil(list.length / 2));
+  const rows = [];
+  for (let i = 0; i < list.length; i += per) {
+    const part = list.slice(i, i + per).map(svcChip);
+    while (part.length < per) part.push({ type: 'stack', flex: 1, height: 22, children: [] });
+    rows.push(row(part, { gap: 5 }));
+  }
+  return col(rows, { gap: 5 });
+}
+
 function exitBlock(e, title, sym, tint, tag, sub) {
   const tagNode = tag && typeof tag === 'object' ? tag : T(tag || '', 9, C.dim, 'medium', { minScale: 0.7 });
   return glass([
@@ -594,7 +614,7 @@ function buildMedium(d) {
           d.pure ? `${d.pure.kind} · ${d.selected.isp || d.selected.ip}` : ''),
       ] },
       list.length
-        ? { type: 'stack', direction: 'row', gap: 3, padding: [6, 5], borderRadius: 14, backgroundColor: C.glass, children: list.map((x) => svcMini(x, 22, true)) }
+        ? svcGrid(list)
         : T('SERVICES 中没有有效服务名', 11, C.warn),
     ],
   };
