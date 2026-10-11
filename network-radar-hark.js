@@ -101,7 +101,12 @@ async function diagnose(ctx) {
 
 function classify(r) {
   const c = r.status;
-  if (c >= 200 && c < 300) return { ok: true, label: '可访问', short: `${r.ms}ms`, color: C.ok, ms: r.ms };
+  if (c >= 200 && c < 300) {
+    const short = r.ms >= 1000 ? `${(r.ms / 1000).toFixed(1)}s` : `${r.ms}ms`;
+    // 图标按状态（绿），数字按网页加载速度分级
+    const speed = r.ms <= 1500 ? C.ok : r.ms <= 3500 ? C.mid : C.slow;
+    return { ok: true, label: '可访问', short, color: C.ok, speed, ms: r.ms };
+  }
   if (c === 401 || c === 403 || c === 451) return { ok: false, label: `受限 ${c}`, short: `${c}`, color: C.warn };
   if (c === 429) return { ok: false, label: '限流 429', short: '429', color: C.warn };
   if (c === 0) return { ok: false, label: '请求失败', short: '失败', color: C.fail };
@@ -115,7 +120,7 @@ function latency(r) {
 
 function msColor(ms) {
   if (ms <= 300) return C.ok;
-  if (ms <= 800) return C.warn;
+  if (ms <= 800) return C.mid;
   return C.fail;
 }
 
@@ -130,6 +135,8 @@ const C = {
   teal: '#64D2FF',
   ok: '#30D158',
   warn: '#FF9F0A',
+  mid: { light: '#B88A00', dark: '#FFD60A' },
+  slow: '#FF9F0A',
   fail: '#FF453A',
 };
 
@@ -238,9 +245,9 @@ function exitCard(label, sym, tint, e, o = {}) {
 function exitMini(label, sym, tint, e, tag) {
   return glass([
     row([icon(sym, tint, 10), T(label, 10, C.dim, 'medium'), T(tag, 9, C.faint), spacer(),
-      T(e.msText, 15, e.msColor, 'bold'), ...(e.alive ? [T('ms', 9, C.dim, 'medium')] : [])], { gap: 3 }),
-    T(`${e.ip} · ${locText(e)}`, 10, C.dim),
-  ], { flex: 1, gap: 3, padding: [6, 10], borderRadius: 14 });
+      T(e.msText, 18, e.msColor, 'bold'), ...(e.alive ? [T('ms', 9, C.dim, 'medium')] : [])], { gap: 3 }),
+    T(`${e.ip} · ${locText(e)}`, 11, C.dim),
+  ], { flex: 1, gap: 4, padding: [8, 10], borderRadius: 16 });
 }
 
 // 服务格子
@@ -249,10 +256,10 @@ function serviceCell(s) {
     type: 'stack', direction: 'row', alignItems: 'center', gap: 5, flex: 1,
     padding: [4, 8], borderRadius: 11, backgroundColor: C.glass,
     children: [
-      icon(s.sym, s.color, 11),
-      T(s.name, 11, C.text, 'medium'),
+      icon(s.sym, s.color, 12),
+      T(s.name, 12, C.text, 'medium', { minScale: 0.85 }),
       spacer(),
-      T(s.short, 10, s.color, 'semibold'),
+      T(s.short, 11, s.speed || s.color, 'semibold', { minScale: 0.85 }),
     ],
   };
 }
@@ -300,17 +307,17 @@ function buildMedium(d) {
   const s = summary(d);
   const list = d.services.slice(0, 6);
   return {
-    type: 'widget', padding: 12, gap: 6, backgroundGradient: bg(),
+    type: 'widget', padding: 12, gap: 8, backgroundGradient: bg(),
     children: [
       header(d),
       {
-        type: 'stack', direction: 'row', gap: 8, height: 46,
+        type: 'stack', direction: 'row', gap: 8, height: 54,
         children: [
           exitMini('直连', 'house.fill', C.teal, d.direct, netName(d)),
           exitMini('所选', 'paperplane.fill', C.accent, d.selected, routeName(d)),
         ],
       },
-      list.length ? serviceGrid(list, 3, 22, 4) : T('SERVICES 中没有有效服务名', 11, C.warn),
+      list.length ? serviceGrid(list, 3, 28, 6) : T('SERVICES 中没有有效服务名', 11, C.warn),
       ...(d.services.length > 6 ? [T(`另有 ${d.services.length - 6} 项 · 共 ${s.ok}/${s.total} 可访问`, 9, C.faint)] : []),
     ],
   };
