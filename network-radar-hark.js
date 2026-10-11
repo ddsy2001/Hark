@@ -77,7 +77,6 @@ async function diagnose(ctx, large) {
 
   // 出口归属（城市 / ISP / ASN），仅大号查询
   async function geo(route) {
-    if (!large) return {};
     const r = await request('https://ipwho.is/?lang=zh-CN', route, true);
     try {
       const j = JSON.parse(r.text || '{}');
@@ -288,54 +287,6 @@ function serviceGrid(services, cols, rowH, gap = 6) {
 
 /* ==================== 布局 ==================== */
 
-function buildSmall(d) {
-  const s = summary(d);
-  return {
-    type: 'widget', padding: 14, gap: 6, backgroundGradient: bg(),
-    children: [
-      row([icon('dot.radiowaves.left.and.right', C.accent, 12), T('网络诊断', 12, C.text, 'semibold'), spacer(), T(hhmm(), 10, C.dim)]),
-      spacer(),
-      row([
-        col([
-          T('所选延迟', 10, C.dim, 'medium'),
-          row([T(d.selected.msText, 26, d.selected.msColor, 'bold'), ...(d.selected.alive ? [T('ms', 10, C.dim, 'medium')] : [])], { alignItems: 'end', gap: 2 }),
-        ], { gap: 0 }),
-        spacer(),
-        {
-          type: 'stack', direction: 'column', alignItems: 'center', gap: 2,
-          children: [
-            { type: 'image', src: segRingSvg(d.services, 100, 14), width: 40, height: 40 },
-            T(`${s.ok}/${s.total}`, 10, s.color, 'bold'),
-          ],
-        },
-      ], { gap: 6 }),
-      spacer(),
-      T(`${flag(d.selected.loc)} ${d.selected.ip}`, 10, C.dim),
-      T(`直连 ${d.direct.msText}${d.direct.alive ? 'ms' : ''} · ${routeName(d)}`, 10, C.dim),
-    ],
-  };
-}
-
-function buildMedium(d) {
-  const s = summary(d);
-  const list = d.services.slice(0, 6);
-  return {
-    type: 'widget', padding: 12, gap: 8, backgroundGradient: bg(),
-    children: [
-      header(d),
-      {
-        type: 'stack', direction: 'row', gap: 8, height: 54,
-        children: [
-          exitMini('直连', 'house.fill', C.teal, d.direct, netName(d)),
-          exitMini('所选', 'paperplane.fill', C.accent, d.selected, routeName(d)),
-        ],
-      },
-      list.length ? serviceGrid(list, 3, 28, 6) : T('SERVICES 中没有有效服务名', 11, C.warn),
-      ...(d.services.length > 6 ? [T(`另有 ${d.services.length - 6} 项 · 共 ${s.ok}/${s.total} 可访问`, 9, C.faint)] : []),
-    ],
-  };
-}
-
 /* ---------- 大号：雷达仪表盘 ---------- */
 
 // 品牌小方块：字母或 SF 图标
@@ -368,8 +319,9 @@ function tile(child, color, size) {
   return { type: 'stack', width: size, height: size, borderRadius: size * 0.3, backgroundColor: color, alignItems: 'center', justifyContent: 'center', direction: 'row', children: [child] };
 }
 
-function brandTile(id, size) {
-  const b = BRAND[id] || { bg: '#8E8E93', t: '?' };
+function brandTile(id, size, dim) {
+  const b0 = BRAND[id] || { bg: '#8E8E93', t: '?' };
+  const b = dim ? { ...b0, bg: '#8E8E9366' } : b0;
   const inner = b.t
     ? T(b.t, b.t.length > 1 ? size * 0.4 : size * 0.52, '#FFFFFF', 'heavy', { minScale: 0.5 })
     : icon(b.s, '#FFFFFF', size * 0.52);
@@ -392,13 +344,13 @@ function svcTile(s) {
   const st = s.ok ? 'OK' : s.short;
   return {
     type: 'stack', direction: 'row', alignItems: 'center', gap: 5, flex: 1,
-    padding: [4, 5], borderRadius: 10, backgroundColor: C.glass,
+    padding: [4, 4], borderRadius: 10, backgroundColor: C.glass,
     children: [
-      brandTile(s.id, 22),
+      brandTile(s.id, 22, !s.ok),
       col([
-        T(s.name, 10, C.text, 'semibold', { minScale: 0.7 }),
+        T(s.name, 10, C.text, 'semibold', { minScale: 0.55 }),
         row([
-          T(s.loc ? `${flag(s.loc)} ${s.loc}` : '--', 8, C.dim, 'medium'),
+          T(flag(s.loc) || '🌐', 8, C.dim, 'medium', { minScale: 1 }),
           T(st, 8, s.ok ? C.ok : s.color, 'bold'),
         ], { gap: 3 }),
       ], { gap: 1 }),
@@ -506,6 +458,85 @@ function buildLarge(d) {
         foot('checkmark.shield.fill', C.ok, '可访问率', `${Math.round(pct * 100)}%`, gColor),
         foot('arrow.clockwise', C.accent, '更新时间', hhmm(), C.accent),
       ] },
+    ],
+  };
+}
+
+// 服务竖排小格：品牌方块 + 状态（中/小号用）
+function svcMini(s, size) {
+  return col([
+    brandTile(s.id, size, !s.ok),
+    T(s.ok ? 'OK' : s.short, 8, s.ok ? C.ok : s.color, 'bold'),
+  ], { alignItems: 'center', gap: 2, flex: 1 });
+}
+
+function exitBlock(e, title, sym, tint, tag) {
+  return glass([
+    row([icon(sym, tint, 10), T(title, 10, C.text, 'bold'), spacer(), T(tag, 9, C.dim, 'medium', { minScale: 0.7 })], { gap: 3 }),
+    row([
+      T(flag(e.loc) || '🌐', 18, C.text),
+      col([
+        T(e.city || e.loc || '地区未知', 11, C.text, 'semibold'),
+        T(e.isp || e.ip, 8, C.faint),
+      ], { gap: 0, flex: 1 }),
+      row([T(e.msText, 16, e.msColor, 'bold'), ...(e.alive ? [T('ms', 8, C.dim, 'medium')] : [])], { alignItems: 'end', gap: 1 }),
+    ], { gap: 5 }),
+  ], { flex: 1, gap: 4, padding: [7, 9], borderRadius: 14 });
+}
+
+function miniHeader(d, title, withPolicy) {
+  return row([
+    tile(icon('waveform.path.ecg', C.accent, 11), { light: '#0A84FF1F', dark: '#0A84FF33' }, 20),
+    T(title, 12, C.text, 'bold'),
+    ...(withPolicy ? [pill(routeName(d), '#BF5AF2')] : []),
+    spacer(),
+    dot(summary(d).color),
+    T(hhmm(), 10, C.dim),
+  ], { gap: 5, height: 20 });
+}
+
+function buildSmall(d) {
+  const s = summary(d);
+  const pct = s.total ? s.ok / s.total : 0;
+  const gColor = pct >= 0.99 ? C.ok : pct >= 0.5 ? C.warn : C.fail;
+  const e = d.selected;
+  const list = d.services.slice(0, 6);
+  return {
+    type: 'widget', padding: 12, gap: 6, backgroundGradient: bg(),
+    children: [
+      miniHeader(d, '网络雷达', false),
+      row([
+        tile(T(flag(e.loc) || '🌐', 18, C.text), { light: '#BF5AF21A', dark: '#BF5AF22E' }, 34),
+        col([
+          T(e.city || e.loc || '--', 12, C.text, 'semibold'),
+          row([T(e.msText, 18, e.msColor, 'bold'), ...(e.alive ? [T('ms', 8, C.dim, 'medium')] : [])], { alignItems: 'end', gap: 1 }),
+        ], { gap: 0, flex: 1 }),
+        col([
+          { type: 'image', src: gaugeSvg(pct, gColor, 80), width: 38, height: 21 },
+          T(`${s.ok}/${s.total}`, 9, gColor, 'bold'),
+        ], { alignItems: 'center', gap: 0 }),
+      ], { gap: 6 }),
+      spacer(),
+      { type: 'stack', direction: 'row', gap: 2, children: list.map((x) => svcMini(x, 18)) },
+      spacer(),
+      T(`直连 ${d.direct.msText}${d.direct.alive ? 'ms' : ''} · ${d.direct.city || netName(d)}`, 9, C.dim),
+    ],
+  };
+}
+
+function buildMedium(d) {
+  const list = d.services.slice(0, 8);
+  return {
+    type: 'widget', padding: 12, gap: 7, backgroundGradient: bg(),
+    children: [
+      miniHeader(d, '网络诊断雷达', true),
+      { type: 'stack', direction: 'row', gap: 8, height: 58, children: [
+        exitBlock(d.direct, '本地网络', d.onWifi ? 'wifi' : 'antenna.radiowaves.left.and.right', C.accent, netName(d)),
+        exitBlock(d.selected, '当前代理', 'point.3.connected.trianglepath.dotted', '#BF5AF2', `${summary(d).ok}/${summary(d).total} 可访问`),
+      ] },
+      list.length
+        ? { type: 'stack', direction: 'row', gap: 4, padding: [5, 6], borderRadius: 14, backgroundColor: C.glass, children: list.map((x) => svcMini(x, 22)) }
+        : T('SERVICES 中没有有效服务名', 11, C.warn),
     ],
   };
 }
