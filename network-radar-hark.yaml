@@ -1,0 +1,35 @@
+name: 网络诊断（Hark 液态玻璃版）
+description: 直连/所选出口、HTTP 延迟、流媒体与 AI 站点可访问性；分段圆环 + 玻璃卡片，支持小/中/大号与锁屏
+env_schema:
+  POLICY:
+    name: 统一策略
+    description: 出口、所选延迟和所有站点统一走此策略（名称须与 Egern 配置一致）；留空按默认规则
+    default_value: ''
+  LMT:
+    name: 流媒体策略
+    description: Netflix/YouTube 等使用的策略；POLICY 非空时忽略
+    default_value: ''
+  AI:
+    name: AI 策略
+    description: ChatGPT/Claude 等使用的策略；POLICY 非空时忽略
+    default_value: ''
+  SERVICES:
+    name: 检测站点
+    description: 逗号分隔，最多 8 个：netflix,youtube,disney,spotify,tiktok,prime,chatgpt,claude,gemini,deepseek,grok,perplexity
+    default_value: 'netflix,youtube,chatgpt,claude,gemini,perplexity'
+  YS:
+    name: 隐藏 IP
+    description: 1 隐藏 IP、网络名和 DNS 地址；0 显示
+    default_value: '1'
+  TIMEOUT:
+    name: 超时（毫秒）
+    description: 单次请求超时，1000~10000
+    default_value: '4500'
+scriptings:
+- generic:
+    name: 网络诊断-Hark
+    script_url: https://raw.githubusercontent.com/zhaohantao1360-hash/Hark/main/network-radar-hark.js
+    timeout: 30
+widgets:
+- name: 网络诊断-Hark
+  script_name: 网络诊断-Hark
