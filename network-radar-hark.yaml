@@ -49,7 +49,7 @@ env_schema:
 scriptings:
 - generic:
     name: 网络诊断-Hark
-    script_url: https://raw.githubusercontent.com/zhaohantao1360-hash/Hark/main/network-radar-hark.js?v=20261011-2215
+    script_url: https://raw.githubusercontent.com/zhaohantao1360-hash/Hark/main/network-radar-hark.js?v=20261011-2216
     timeout: 30
 widgets:
 - name: 网络诊断-Hark
