@@ -1,0 +1,59 @@
+name: 京东去广告 + 比价
+description: 移除京东开屏广告、精简「我的」页推广；商品详情页显示历史价格（数据来自慢慢买）。首次使用请打开慢慢买 App →「我的」，看到「获取ck成功🎉」后再进京东商品详情页。改编自 kelvinlab 京东去广告（RuCu6 / mist-whisper）与 jnlaoshu 京东比价。
+author: RuCu6, mist-whisper, jnlaoshu（Egern 原生版由 Hark 改写）
+icon: cart
+
+rules:
+  - domain:
+      match: dns.jd.com
+      policy: REJECT
+  - ip_cidr:
+      match: 101.124.19.122/32
+      policy: REJECT
+      no_resolve: true
+  - ip_cidr6:
+      match: "2402:db40:5100:1011::5/128"
+      policy: REJECT
+      no_resolve: true
+  - url_regex:
+      match: "^http:\\/\\/\\w{32}\\.jddebug\\.com\\/diagnose\\?"
+      policy: REJECT
+
+url_rewrites:
+  - match: "^https:\\/\\/api\\.m\\.jd\\.com\\/client\\.action\\?functionId=(searchBoxWord|stationPullService|uniformRecommend[06])"
+    location: "http://reject-dict/"
+  - match: "^https?:\\/\\/m\\.360buyimg\\.com\\/mobilecms\\/s1125x2436_jfs"
+    location: "http://reject-200/"
+
+body_rewrites:
+  - response_jq:
+      match: "^https:\\/\\/api\\.m\\.jd\\.com\\/client\\.action\\?functionId=basicConfig"
+      filter: 'if .data.JDMessage.socketmonitor then .data.JDMessage.socketmonitor.isSocketEstablishedAhead = 0 | .data.JDMessage.socketmonitor.isSocketReport = 0 else . end | if .data.JDHttpToolKit.httpdns then .data.JDHttpToolKit.httpdns.httpdns = 0 else . end'
+
+scriptings:
+  - http_response:
+      name: 京东去广告
+      match: "^https:\\/\\/api\\.m\\.jd\\.com\\/client\\.action\\?functionId=(deliverLayer|getTabHomeInfo|myOrderInfo|orderTrackBusiness|personinfoBusiness|start|welcomeHome)"
+      script_url: https://raw.githubusercontent.com/zhaohantao1360-hash/Hark/main/JD-hark-ads.js
+      body_required: true
+      max_size: 4194304
+  - http_response:
+      name: 京东比价
+      match: "^https?:\\/\\/in\\.m\\.jd\\.com\\/product\\/graphext\\/\\d+\\.html"
+      script_url: https://raw.githubusercontent.com/zhaohantao1360-hash/Hark/main/JD-hark-price.js
+      body_required: true
+      max_size: 4194304
+      timeout: 30
+  - http_request:
+      name: 慢慢买获取CK
+      match: "^https?:\\/\\/apapia-sqk-weblogic\\.manmanbuy\\.com\\/baoliao\\/center\\/menu$"
+      script_url: https://raw.githubusercontent.com/zhaohantao1360-hash/Hark/main/JD-hark-price.js
+      body_required: true
+      timeout: 30
+
+mitm:
+  hostnames:
+    - api.m.jd.com
+    - in.m.jd.com
+    - m.360buyimg.com
+    - apapia-sqk-weblogic.manmanbuy.com
