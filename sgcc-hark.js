@@ -3,7 +3,7 @@
  * 版式参考 jadkg/egern「南方电网小组件」：余额 / 昨日 / 本月 / 上月 + 近日用电柱状图。
  * 数据：运行时加载 Yuheng0101/X 的 95598.js（服务模式），用其登录网上国网并查询；本脚本只做兼容层和界面。
  * 环境变量：SGCC_USERNAME / SGCC_PASSWORD（网上国网账号密码）、SGCC_ACCOUNT（多户号时填户号后几位）、
- *          SGCC_REFRESH（数据刷新间隔小时，默认 6）、SGCC_SCHEDULE（定时任务内部用）。
+ *          SGCC_POLICY（国网请求走的策略，默认 DIRECT）、SGCC_REFRESH（数据刷新间隔小时，默认 6）、SGCC_SCHEDULE（定时任务内部用）。
  */
 
 const SRC_URL = 'https://raw.githubusercontent.com/Yuheng0101/X/main/Tasks/95598/95598.js';
@@ -43,6 +43,7 @@ async function loadSource(ctx) {
 // 给 Surge 风格脚本搭一个兼容层（$httpClient / $persistentStore / $done），在服务模式下运行它
 async function runSgcc(ctx, username, password) {
   const code = await loadSource(ctx);
+  const policy = clean((ctx.env || {}).SGCC_POLICY) || 'DIRECT';
   const g = globalThis;
   const names = ['$httpClient', '$persistentStore', '$done', '$request', '$argument', '$notification', '$environment', '$script'];
   const saved = {};
@@ -65,6 +66,8 @@ async function runSgcc(ctx, username, password) {
         const t = Number(o.timeout) > 0 ? Number(o.timeout) : 15;
         const req = { headers: o.headers || {}, timeout: (t > 500 ? t : t * 1000) };
         if (o.body != null && method !== 'get' && method !== 'head') req.body = o.body;
+        // 95598 会拒绝境外/代理出口（GB008），国网域名强制走直连
+        if (/(^|\.)95598\.cn(\/|:|$)/.test(String(o.url).replace(/^https?:\/\//, '')) && policy) req.policy = policy;
         const fn = ctx.http[method] || ((u, r) => ctx.http.post(u, r));
         Promise.resolve(fn.call(ctx.http, o.url, req))
           .then(async (resp) => {
@@ -440,7 +443,10 @@ export default async function (ctx) {
   const family = ctx.widgetFamily || 'systemMedium';
   const r = await getData(ctx, false);
   if (!r.configured) return message('还没填写账号', '到 Egern「工具 → 模块 → 网上国网」里填写网上国网的手机号和密码，保存后刷新小组件。');
-  if (!r.cache || !r.cache.list) return message('暂时取不到数据', r.error || '请稍后刷新', null);
+  if (!r.cache || !r.cache.list) {
+    const hint = /GB008/.test(r.error || '') ? '\n国网拒绝了请求，多半是走了境外/代理出口。确认模块「国网请求策略」为 DIRECT，或换成国内节点。' : '';
+    return message('暂时取不到数据', (r.error || '请稍后刷新') + hint, null);
+  }
   const acc = pickAccount(r.cache.list, env.SGCC_ACCOUNT);
   if (!acc) return message('没有绑定户号', '请先在网上国网 App 里绑定用电户号。', r.cache.ts);
   const p = parse(acc);
