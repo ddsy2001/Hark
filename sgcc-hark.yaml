@@ -1,0 +1,41 @@
+name: 网上国网（Hark 液态玻璃版）
+description: 国家电网电费余额、昨日/本月/上月用电、近 30 日与月度柱状图；支持小/中/大号与锁屏。填写网上国网账号密码即可，每 6 小时自动更新
+author: Hark（版式参考 jadkg 南方电网小组件；登录与查询基于 Yuheng0101/X 95598 脚本）
+icon: https://is1-ssl.mzstatic.com/image/thumb/Purple116/v4/83/d8/8a/83d88a92-5a4d-7a2f-118c-80d795e7a9f6/AppIcon-0-0-1x_U007emarketing-0-5-0-0-sRGB-85-220.png/144x144.png
+env_schema:
+  SGCC_USERNAME:
+    name: 网上国网账号
+    description: 登录网上国网 App 的手机号
+    default_value: ''
+  SGCC_PASSWORD:
+    name: 网上国网密码
+    description: 网上国网 App 的登录密码（没设过密码的先在 App 里设置一个）
+    default_value: ''
+  SGCC_ACCOUNT:
+    name: 户号（可选）
+    description: 账号下绑了多个户号时，填要显示的户号后 4 位；留空显示第一个
+    default_value: ''
+  SGCC_REFRESH:
+    name: 刷新间隔（小时）
+    description: 电量数据每天更新一次，间隔太短容易触发风控
+    default_value: '6'
+    options:
+      - '3'
+      - '6'
+      - '12'
+      - '24'
+scriptings:
+- generic:
+    name: sgcc-hark
+    script_url: https://raw.githubusercontent.com/zhaohantao1360-hash/Hark/main/sgcc-hark.js?v=20261013-2050
+    timeout: 60
+- schedule:
+    name: 网上国网定时更新
+    cron: '17 */6 * * *'
+    script_url: https://raw.githubusercontent.com/zhaohantao1360-hash/Hark/main/sgcc-hark.js?v=20261013-2050
+    timeout: 60
+    env:
+      SGCC_SCHEDULE: 'true'
+widgets:
+- name: sgcc-hark
+  script_name: sgcc-hark
