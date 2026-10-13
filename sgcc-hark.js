@@ -7,6 +7,8 @@
  *          SGCC_ACCOUNT（多户号时填户号或尾号，或 #2 表示第 2 个；不同小组件可在小组件环境变量里各填一个）、SGCC_POLICY（请求策略，默认 DIRECT）、SGCC_REFRESH（刷新间隔小时，默认 6）、SGCC_TIERS（阶梯年用电分界，北京默认 2880,4800）。
  */
 
+// 会话、验证码、缓存按登录手机号分开存，多个账号的小组件互不覆盖
+function uk(base, user) { return `${base}_${md5hex(String(user)).slice(0, 8)}`; }
 const K = { data: 'sgcc_hark_data2', err: 'sgcc_hark_err2', lock: 'sgcc_hark_lock', dev: 'sgcc_app_dev', sess: 'sgcc_app_sess', sms: 'sgcc_app_sms' };
 
 function clean(v) { return String(v == null ? '' : v).trim(); }
@@ -302,6 +304,7 @@ function loginParams(account, password, code, codeKey) {
 
 class SgApp {
   constructor(ctx, user, pass) { this.ctx = ctx; this.user = user; this.pass = pass; this.policy = clean((ctx.env || {}).SGCC_POLICY) || 'DIRECT'; this.dev = null; this.sess = null; }
+  sk(base) { return uk(base, this.user); }
   st(k, v) { try { if (v === undefined) return this.ctx.storage.getJSON(k); this.ctx.storage.setJSON(k, v); } catch (_) { return null; } return null; }
   device() {
     if (this.dev) return this.dev;
@@ -367,7 +370,7 @@ class SgApp {
     let ui = biz.userInfo; if (Array.isArray(ui)) ui = ui.find((x) => x && typeof x === 'object') || {}; ui = ui || {};
     const life = Number(biz.tokenExpireTime) || 1296000;
     this.sess = { user: this.user, token: String(biz.token), userId: String(ui.userId || biz.userId || '0'), province: clean(ui.addressProvince), exp: Date.now() + Math.max(300, life) * 1000, accounts: (Array.isArray(ui.powerUserList) ? ui.powerUserList : []).map(acctOf).filter(Boolean) };
-    this.st(K.sess, this.sess);
+    this.st(this.sk(K.sess), this.sess);
     return this.sess;
   }
   async sendDeviceSms() {
@@ -378,14 +381,15 @@ class SgApp {
     return String(ck);
   }
   async ensure() {
-    const s = this.st(K.sess);
+    let s = this.st(this.sk(K.sess));
+    if (!s || !s.token) { const o = this.st(K.sess); if (o && o.user === this.user) s = o; }
     if (s && s.user === this.user && s.token && s.exp > Date.now() + 300000) { this.sess = s; return s; }
     const env = this.ctx.env || {};
     const sms = clean(env.SGCC_SMS).replace(/\D/g, '');
-    const pend = this.st(K.sms);
+    const pend = this.st(this.sk(K.sms));
     const pendOk = pend && pend.user === this.user && Date.now() - pend.ts < 15 * 60000;
     if (pendOk && sms.length === 6 && sms !== pend.used) {
-      this.st(K.sms, { ...pend, used: sms });
+      this.st(this.sk(K.sms), { ...pend, used: sms });
       return this.login(sms, pend.codeKey);
     }
     try { return await this.login(); }
@@ -393,9 +397,9 @@ class SgApp {
       if (e.code !== '4006') throw e;
       if (!pendOk || Date.now() - pend.ts > 5 * 60000) {
         const codeKey = await this.sendDeviceSms();
-        this.st(K.sms, { user: this.user, codeKey, ts: Date.now(), used: sms });
+        this.st(this.sk(K.sms), { user: this.user, codeKey, ts: Date.now(), used: sms });
       }
-      throw new SgError('4006', `国网要验证新设备：验证码已发到 ${this.user.slice(0, 3)}****${this.user.slice(-4)}，填到模块「短信验证码」里保存，再刷新小组件`);
+      throw new SgError('4006', `国网要验证新设备：验证码已发到 ${this.user.slice(0, 3)}****${this.user.slice(-4)}，填到「短信验证码」（SGCC_SMS）里保存，再刷新小组件`);
     }
   }
   async authed(path, payload) {
@@ -405,7 +409,7 @@ class SgApp {
       try { return SgApp.check(resp); }
       catch (e) {
         if (!['-200', '-201'].includes(e.code) || i) throw e;
-        this.st(K.sess, {}); this.sess = null; await this.ensure();
+        this.st(this.sk(K.sess), {}); this.sess = null; await this.ensure();
       }
     }
     return {};
@@ -606,31 +610,33 @@ async function getData(ctx, force) {
   const username = clean(env.SGCC_USERNAME);
   const password = clean(env.SGCC_PASSWORD);
   let cache = null;
-  try { cache = ctx.storage.getJSON(K.data); } catch (_) {}
-  if (!username || !password) return { configured: false, cache };
+  if (!username || !password) return { configured: false, cache: null };
+  const KD = uk(K.data, username), KE = uk(K.err, username), KL = uk(K.lock, username);
+  try { cache = ctx.storage.getJSON(KD); } catch (_) {}
+  if (!cache) { try { const o = ctx.storage.getJSON(K.data); if (o && o.user === username) cache = o; } catch (_) {} }
   const mine = cache && cache.user === username && cache.v === 3 ? cache : null;
   const hours = Math.max(1, num(env.SGCC_REFRESH) || 6);
   if (mine && mine.list && Date.now() - mine.ts < hours * 3600000 && !force) return { configured: true, cache: mine };
   // 失败退避：同一账号密码失败后 30 分钟内不重复登录（避免触发锁号），填了新验证码时例外
   let err = null;
-  try { err = ctx.storage.getJSON(K.err); } catch (_) {}
+  try { err = ctx.storage.getJSON(KE); } catch (_) {}
   const sig = md5hex(username + '|' + password + '|' + clean(env.SGCC_SMS));
   if (err && err.sig === sig && Date.now() - err.ts < 30 * 60000) return { configured: true, cache: mine, error: err.msg };
   let lock = 0;
-  try { lock = Number(ctx.storage.get(K.lock) || 0); } catch (_) {}
+  try { lock = Number(ctx.storage.get(KL) || 0); } catch (_) {}
   if (lock && Date.now() - lock < 90000) return { configured: true, cache: mine, busy: true, error: mine ? '' : '正在登录网上国网…' };
-  try { ctx.storage.set(K.lock, String(Date.now())); } catch (_) {}
+  try { ctx.storage.set(KL, String(Date.now())); } catch (_) {}
   try {
     const list = await runSgcc(ctx, username, password);
     const next = { v: 3, ts: Date.now(), user: username, list };
-    try { ctx.storage.setJSON(K.data, next); ctx.storage.setJSON(K.err, {}); } catch (_) {}
+    try { ctx.storage.setJSON(KD, next); ctx.storage.setJSON(KE, {}); } catch (_) {}
     return { configured: true, cache: next };
   } catch (e) {
     const msg = friendly(e);
-    try { ctx.storage.setJSON(K.err, { sig, ts: Date.now(), msg }); } catch (_) {}
+    try { ctx.storage.setJSON(KE, { sig, ts: Date.now(), msg }); } catch (_) {}
     return { configured: true, cache: mine, error: msg };
   } finally {
-    try { ctx.storage.set(K.lock, '0'); } catch (_) {}
+    try { ctx.storage.set(KL, '0'); } catch (_) {}
   }
 }
 
@@ -751,6 +757,7 @@ function header(p, ts, compact) {
     T(compact ? '国家电网' : '网上国网', 12, C.text, 'bold'),
     ...(!compact && (p.name || tail) ? [T(p.name || tail, 10, C.dim, 'medium')] : []),
     ...(!compact && p.count > 1 ? [T(`${p.index}/${p.count}`, 9, C.faint)] : []),
+    ...(!compact && p.login ? [T(`账号${p.login}`, 9, C.faint)] : []),
     ...(!compact && p.miss ? [T(`没找到户号 ${p.miss}`, 9, C.warn, 'medium')] : []),
     spacer(),
     icon('arrow.clockwise', C.faint, 9),
@@ -937,6 +944,7 @@ export default async function (ctx) {
   if (!acc) return message('没有绑定户号', '请先在网上国网 App 里绑定用电户号。', r.cache.ts);
   const p = parse(acc);
   p.miss = picked.miss;
+  p.login = clean(env.SGCC_USERNAME).slice(-4);
   p.count = r.cache.list.length;
   p.index = r.cache.list.indexOf(acc) + 1;
   if (family.startsWith('accessory')) return buildLock(p, r, family);
