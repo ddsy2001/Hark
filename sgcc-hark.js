@@ -718,6 +718,39 @@ function barsSvg(vals, w, h, opts = {}) {
   return svgUri(s);
 }
 
+// 用 stack 拼柱状图：每天一列 flex:1，自动铺满任何宽度，日期标签和柱子天然对齐
+function hexA(hex, a) { return hex + Math.round(Math.max(0, Math.min(1, a)) * 255).toString(16).padStart(2, '0').toUpperCase(); }
+function flexBars(vals, H, opts = {}) {
+  const n = vals.length;
+  if (!n) return row([spacer()], { height: H });
+  const max = Math.max(...vals, 0.1);
+  const top = opts.top || '#64D2FF', bottom = opts.bottom || '#00A3A0';
+  const hotC = opts.hot || '#FF9F0A', latestC = opts.latest || '#30D158';
+  const labels = opts.labels || null;
+  const ls = opts.size || 7;
+  const gap = n > 20 ? 2 : n > 10 ? 3 : 5;
+  const cols = vals.map((v, i) => {
+    const bh = Math.max(2, Math.round((v / max) * H));
+    const hot = v === max && v > 0;
+    const latest = i === n - 1;
+    const fade = 0.55 + 0.45 * (i / Math.max(1, n - 1));
+    const bar = { type: 'stack', direction: 'row', height: bh, borderRadius: Math.min(4, bh / 2), children: [spacer()] };
+    if (latest) bar.backgroundColor = latestC;
+    else if (hot) bar.backgroundColor = hotC;
+    else bar.backgroundGradient = { type: 'linear', colors: [hexA(top, fade), hexA(bottom, fade)], startPoint: { x: 0, y: 0 }, endPoint: { x: 0, y: 1 } };
+    const kids = [spacer(), bar];
+    if (labels) {
+      let color = opts.weekend && opts.weekend[i] ? '#64D2FF99' : C.faint, weight = 'regular';
+      if (hot) { color = hotC; weight = 'semibold'; }
+      if (opts.strong && opts.strong[i]) { color = C.dim; weight = 'semibold'; }
+      if (latest) { color = latestC; weight = 'bold'; }
+      kids.push(T(labels[i], ls, color, weight, { minScale: 0.4 }));
+    }
+    return { type: 'stack', direction: 'column', alignItems: 'center', flex: 1, gap: 2, height: H + (labels ? ls + 4 : 0), children: kids };
+  });
+  return row(cols, { gap, alignItems: 'end' });
+}
+
 // 柱子下方逐根标注，宽度和 barsSvg 的柱位一致
 const CW = 318; // 图表宽度，贴合中/大号卡片内宽
 function axisRow(labels, w, opts = {}) {
@@ -822,7 +855,7 @@ function buildSmall(p, r) {
         col([T(`昨日 ${mmdd(p.yesterdayKey)}`, 8, C.faint), row([T(fmt(p.yesterday), 13, C.text, 'bold'), T('度', 8, C.dim)], { alignItems: 'end', gap: 1 })], { gap: 0, flex: 1 }),
         col([row([T('本月', 8, C.faint), ...(p.tier ? [T(tierText(p, true), 8, tierColor(p), 'semibold')] : [])], { gap: 3 }), row([T(fmt(p.monthUse), 13, C.text, 'bold'), T('度', 8, C.dim)], { alignItems: 'end', gap: 1 })], { gap: 0, flex: 1 }),
       ], { gap: 6 }),
-      e || { type: 'image', src: barsSvg(vals, 140, 20), width: 130, height: 20 },
+      e || flexBars(vals, 20),
     ],
   };
 }
@@ -845,9 +878,9 @@ function buildMedium(p, r) {
       ], { gap: 5, height: 58 }),
       glass([
         row([T(`近${list.length || 14}日`, 9, C.dim, 'medium'), T(rangeText(list), 8, C.faint), spacer(), ...(e ? [e] : [T(`日均 ${fmt(vals.length ? vals.reduce((x, y) => x + y, 0) / vals.length : NaN)}`, 8, C.dim, 'semibold'), legend(`峰值 ${fmt(peak)}`)])], { gap: 4 }),
-        { type: 'image', src: barsSvg(vals, CW, 18), width: CW, height: 18 },
-        (() => { const d = dayLabels(list); return axisRow(d.labels, CW, { vals, weekend: d.weekend, strong: d.strong }); })(),
-      ], { gap: 2, padding: [5, 8], borderRadius: 13 }),
+        spacer(),
+        (() => { const d = dayLabels(list); return flexBars(vals, 20, { labels: d.labels, weekend: d.weekend, strong: d.strong }); })(),
+      ], { gap: 3, padding: [5, 8], borderRadius: 13, flex: 1 }),
     ],
   };
 }
@@ -886,14 +919,13 @@ function buildLarge(p, r) {
       glass([
         row([icon('chart.bar.xaxis', C.brand, 10), T(`近${list.length || 30}日用电`, 10, C.text, 'semibold'), T(rangeText(list), 8, C.faint), spacer(),
           T(`日均 ${fmt(avg)}`, 9, C.dim), legend(`峰值 ${fmt(peak)}`)], { gap: 4 }),
-        { type: 'image', src: barsSvg(vals, CW, 46), width: CW, height: 46 },
-        (() => { const d = dayLabels(list); return axisRow(d.labels, CW, { vals, weekend: d.weekend, strong: d.strong, size: 6 }); })(),
-      ], { gap: 4, padding: [8, 10], borderRadius: 14 }),
+        spacer(),
+        (() => { const d = dayLabels(list); return flexBars(vals, 46, { labels: d.labels, weekend: d.weekend, strong: d.strong, size: 6 }); })(),
+      ], { gap: 4, padding: [8, 10], borderRadius: 14, flex: 1 }),
       glass([
         row([icon('calendar.badge.clock', '#BF5AF2', 10), T(`${new Date().getFullYear()} 年月度用电`, 10, C.text, 'semibold'), spacer(),
           T(mv.length ? `共 ${mv.length} 个月` : '暂无', 9, C.dim)], { gap: 4 }),
-        { type: 'image', src: barsSvg(mv, CW, 36, { top: '#BF5AF2', bottom: '#5E5CE6', hot: '#FF9F0A', latest: '#DA8FFF' }), width: CW, height: 36 },
-        axisRow(mv.map((_, i) => `${i + 1}月`), CW, { vals: mv, latest: '#DA8FFF', size: 8 }),
+        flexBars(mv, 36, { top: '#BF5AF2', bottom: '#5E5CE6', latest: '#DA8FFF', labels: mv.map((_, i) => `${i + 1}月`), size: 8 }),
       ], { gap: 4, padding: [8, 10], borderRadius: 14 }),
       e || row([icon('building.2', C.faint, 9), T(p.org || '国家电网', 8, C.faint), spacer(), T(p.billDate ? `余额截至 ${p.billDate}` : '', 8, C.faint)], { gap: 3 }),
     ],
