@@ -711,12 +711,12 @@ function tierText(p, short) {
 }
 function tierColor(p) { return !p.tier ? C.faint : p.tier.lv === 1 ? C.ok : p.tier.lv === 2 ? C.warn : C.fail; }
 
-function statCell(sym, tint, label, value, unit, sub, subColor) {
+function statCell(sym, tint, label, value, unit, sub, subColor, h = 58) {
   return glass([
     row([icon(sym, tint, 10), T(label, 10, C.dim, 'medium')], { gap: 3 }),
     row([T(value, 17, C.text, 'bold'), T(unit, 9, C.dim, 'medium')], { alignItems: 'end', gap: 2 }),
-    ...(sub ? [T(sub, 8, subColor || C.faint)] : []),
-  ], { flex: 1, gap: 2, padding: [6, 8], borderRadius: 13 });
+    T(sub || ' ', 8, subColor || C.faint),
+  ], { flex: 1, height: h, justifyContent: 'center', gap: 2, padding: [6, 8], borderRadius: 13 });
 }
 
 function balanceBlock(p, big = 24) {
@@ -775,7 +775,7 @@ function buildMedium(p, r) {
     children: [
       header(p, r.cache.ts, false),
       row([
-        glass([balanceBlock(p, 22)], { padding: [6, 9], borderRadius: 13, width: 104 }),
+        glass([balanceBlock(p, 22)], { padding: [6, 9], borderRadius: 13, width: 104, height: 58, justifyContent: 'center' }),
         statCell('sun.max.fill', C.warn, '昨日', fmt(p.yesterday), '度', mmdd(p.yesterdayKey)),
         statCell('calendar', C.blue, '本月', fmt(p.monthUse), '度', tierText(p), tierColor(p)),
         statCell('clock.arrow.circlepath', '#BF5AF2', '上月', fmt(lm ? lm.v : NaN, 0), '度', lm && Number.isFinite(lm.cost) ? `¥${money(lm.cost)}` : ''),
@@ -811,12 +811,12 @@ function buildLarge(p, r) {
     children: [
       header(p, r.cache.ts, false),
       row([
-        glass([balanceBlock(p, 28)], { padding: [8, 10], borderRadius: 14, flex: 1 }),
+        glass([balanceBlock(p, 28)], { padding: [8, 10], borderRadius: 14, flex: 1, height: 110, justifyContent: 'center' }),
         col([
-          row([statCell('sun.max.fill', C.warn, '昨日', fmt(p.yesterday), '度', mmdd(p.yesterdayKey)),
-            statCell('calendar', C.blue, '本月', fmt(p.monthUse), '度', tierText(p), tierColor(p))], { gap: 6 }),
-          row([statCell('clock.arrow.circlepath', '#BF5AF2', '上月', fmt(lm ? lm.v : NaN, 0), '度', lm && Number.isFinite(lm.cost) ? `¥${money(lm.cost)}` : ''),
-            statCell('chart.bar.fill', C.teal, '今年', fmt(p.yearUse, 0), '度', Number.isFinite(p.yearCost) ? `¥${money(p.yearCost)}` : '')], { gap: 6 }),
+          row([statCell('sun.max.fill', C.warn, '昨日', fmt(p.yesterday), '度', mmdd(p.yesterdayKey), null, 52),
+            statCell('calendar', C.blue, '本月', fmt(p.monthUse), '度', tierText(p), tierColor(p), 52)], { gap: 6, height: 52 }),
+          row([statCell('clock.arrow.circlepath', '#BF5AF2', '上月', fmt(lm ? lm.v : NaN, 0), '度', lm && Number.isFinite(lm.cost) ? `¥${money(lm.cost)}` : '', null, 52),
+            statCell('chart.bar.fill', C.teal, '今年', fmt(p.yearUse, 0), '度', Number.isFinite(p.yearCost) ? `¥${money(p.yearCost)}` : '', null, 52)], { gap: 6, height: 52 }),
         ], { gap: 6, flex: 1.6 }),
       ], { gap: 6, height: 110 }),
       glass([
