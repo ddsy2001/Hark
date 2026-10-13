@@ -19,6 +19,10 @@ env_schema:
     name: 户号（可选）
     description: 账号下绑了多个户号时，填要显示的户号后 4 位；留空显示第一个
     default_value: ''
+  SGCC_TIERS:
+    name: 阶梯分界（可选）
+    description: 年用电阶梯分界度数，逗号分隔；北京默认 2880,4800，其他省份按当地标准填
+    default_value: ''
   SGCC_POLICY:
     name: 国网请求策略
     description: 国网接口默认直连；直连不通再填国内节点或策略组名
@@ -35,12 +39,12 @@ env_schema:
 scriptings:
 - generic:
     name: sgcc-hark
-    script_url: https://raw.githubusercontent.com/zhaohantao1360-hash/Hark/main/sgcc-hark.js?v=20261013-2130
+    script_url: https://raw.githubusercontent.com/zhaohantao1360-hash/Hark/main/sgcc-hark.js?v=20261013-2125
     timeout: 60
 - schedule:
     name: 网上国网定时更新
     cron: '17 */6 * * *'
-    script_url: https://raw.githubusercontent.com/zhaohantao1360-hash/Hark/main/sgcc-hark.js?v=20261013-2130
+    script_url: https://raw.githubusercontent.com/zhaohantao1360-hash/Hark/main/sgcc-hark.js?v=20261013-2125
     timeout: 60
     env:
       SGCC_SCHEDULE: 'true'
