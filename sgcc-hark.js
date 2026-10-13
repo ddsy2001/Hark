@@ -4,7 +4,7 @@
  * 数据：直接按网上国网 Android App 3.2.3 协议登录查询（SM2/SM3/SM4 加密 + Turing 设备令牌），不经过任何第三方网关。
  *   协议与设备令牌算法移植自 stevenjoezhang/hass-state-grid（MIT License, Copyright (c) 2026 stevenjoezhang）。
  * 环境变量：SGCC_USERNAME / SGCC_PASSWORD（网上国网账号密码）、SGCC_SMS（新设备短信验证码，提示时再填）、
- *          SGCC_ACCOUNT（多户号时填户号后几位）、SGCC_POLICY（请求策略，默认 DIRECT）、SGCC_REFRESH（刷新间隔小时，默认 6）、SGCC_TIERS（阶梯年用电分界，北京默认 2880,4800）。
+ *          SGCC_ACCOUNT（多户号时填户号或尾号，或 #2 表示第 2 个；不同小组件可在小组件环境变量里各填一个）、SGCC_POLICY（请求策略，默认 DIRECT）、SGCC_REFRESH（刷新间隔小时，默认 6）、SGCC_TIERS（阶梯年用电分界，北京默认 2880,4800）。
  */
 
 const K = { data: 'sgcc_hark_data2', err: 'sgcc_hark_err2', lock: 'sgcc_hark_lock', dev: 'sgcc_app_dev', sess: 'sgcc_app_sess', sms: 'sgcc_app_sms' };
@@ -470,7 +470,7 @@ async function queryAccount(app, a) {
     if (num(bal.historyOwe) > 0) owe = num(bal.historyOwe);
   }
   return {
-    userInfo: { consNo_dst: a.src, consName_dst: a.name, orgName: a.orgName, proNo: a.pro },
+    userInfo: { consNo: a.consNo, consNo_dst: a.src, consName_dst: a.name, orgName: a.orgName, proNo: a.pro },
     eleBill: { sumMoney, historyOwe: owe, prepayBal: bal ? num(bal.prepayBal) : NaN, date: bal ? clean(bal.date || bal.amtTime) : '' },
     dayElecQuantity31: { sevenEleList: daily },
     monthElecQuantity: { mothEleList: bills, dataInfo: { totalEleNum: yearPq, totalEleCost: yearAmt } },
@@ -483,21 +483,40 @@ async function runSgcc(ctx, username, password) {
   const s = await app.ensure();
   const accts = s.accounts || [];
   if (!accts.length) return [];
-  const want = clean((ctx.env || {}).SGCC_ACCOUNT);
-  const pick = (want && accts.find((a) => a.src.endsWith(want) || a.consNo.endsWith(want))) || accts[0];
-  return [await queryAccount(app, pick)];
+  // 账号下所有户号都查一遍（最多 6 个），显示哪个由 SGCC_ACCOUNT 在渲染时决定，改户号不用重新登录
+  const out = [];
+  for (const a of accts.slice(0, 6)) {
+    try { out.push(await queryAccount(app, a)); } catch (e) { if (!out.length && a === accts[accts.length - 1]) throw e; }
+  }
+  if (!out.length) throw new Error('户号数据查询失败');
+  return out;
 }
 
 /* ==================== 解析 ==================== */
 
+// SGCC_ACCOUNT：户号全号或后几位（脱敏户号也能按尾号匹配），也可填 #2 表示第 2 个户号；多个用逗号分隔时取第一个能匹配的
+function matchAcc(x, w) {
+  const u = x.userInfo || {};
+  const d = w.replace(/\D/g, '');
+  if (!d) return false;
+  return [u.consNo, u.consNo_dst, u.consNoSrc].some((v) => {
+    const c = clean(v);
+    if (!c) return false;
+    if (c.replace(/\D/g, '').endsWith(d) || c.endsWith(w)) return true;
+    const tail = (c.match(/(\d+)$/) || [])[1] || '';
+    return tail.length >= 3 && d.endsWith(tail) && d.length >= tail.length;
+  });
+}
 function pickAccount(list, want) {
-  if (!Array.isArray(list) || !list.length) return null;
-  const w = clean(want);
-  if (w) {
-    const hit = list.find((x) => { const u = x.userInfo || {}; return [u.consNo_dst, u.consNo, u.consNoSrc].some((v) => clean(v).endsWith(w)); });
-    if (hit) return hit;
+  if (!Array.isArray(list) || !list.length) return { acc: null };
+  const ws = clean(want).split(/[,，;；\s]+/).filter(Boolean);
+  for (const w of ws) {
+    const idx = w.match(/^#(\d)$/);
+    if (idx) { const a = list[Number(idx[1]) - 1]; if (a) return { acc: a }; continue; }
+    const hit = list.find((x) => matchAcc(x, w));
+    if (hit) return { acc: hit };
   }
-  return list[0];
+  return { acc: list[0], miss: ws.length ? ws.join(',') : '' };
 }
 
 function dayKey(s) {
@@ -589,7 +608,7 @@ async function getData(ctx, force) {
   let cache = null;
   try { cache = ctx.storage.getJSON(K.data); } catch (_) {}
   if (!username || !password) return { configured: false, cache };
-  const mine = cache && cache.user === username ? cache : null;
+  const mine = cache && cache.user === username && cache.v === 3 ? cache : null;
   const hours = Math.max(1, num(env.SGCC_REFRESH) || 6);
   if (mine && mine.list && Date.now() - mine.ts < hours * 3600000 && !force) return { configured: true, cache: mine };
   // 失败退避：同一账号密码失败后 30 分钟内不重复登录（避免触发锁号），填了新验证码时例外
@@ -603,7 +622,7 @@ async function getData(ctx, force) {
   try { ctx.storage.set(K.lock, String(Date.now())); } catch (_) {}
   try {
     const list = await runSgcc(ctx, username, password);
-    const next = { ts: Date.now(), user: username, list };
+    const next = { v: 3, ts: Date.now(), user: username, list };
     try { ctx.storage.setJSON(K.data, next); ctx.storage.setJSON(K.err, {}); } catch (_) {}
     return { configured: true, cache: next };
   } catch (e) {
@@ -731,6 +750,8 @@ function header(p, ts, compact) {
     { type: 'stack', width: 20, height: 20, borderRadius: 6, backgroundColor: { light: '#00A3A01F', dark: '#00A3A033' }, alignItems: 'center', justifyContent: 'center', children: [icon('bolt.fill', C.brand, 11)] },
     T(compact ? '国家电网' : '网上国网', 12, C.text, 'bold'),
     ...(!compact && (p.name || tail) ? [T(p.name || tail, 10, C.dim, 'medium')] : []),
+    ...(!compact && p.count > 1 ? [T(`${p.index}/${p.count}`, 9, C.faint)] : []),
+    ...(!compact && p.miss ? [T(`没找到户号 ${p.miss}`, 9, C.warn, 'medium')] : []),
     spacer(),
     icon('arrow.clockwise', C.faint, 9),
     T(updText(ts), 10, C.dim),
@@ -911,9 +932,13 @@ export default async function (ctx) {
   const r = await getData(ctx, false);
   if (!r.configured) return message('还没填写账号', '到 Egern「工具 → 模块 → 网上国网」里填写网上国网的手机号和密码，保存后刷新小组件。');
   if (!r.cache || !r.cache.list) return message('暂时取不到数据', r.error || '请稍后刷新', null);
-  const acc = pickAccount(r.cache.list, env.SGCC_ACCOUNT);
+  const picked = pickAccount(r.cache.list, env.SGCC_ACCOUNT);
+  const acc = picked.acc;
   if (!acc) return message('没有绑定户号', '请先在网上国网 App 里绑定用电户号。', r.cache.ts);
   const p = parse(acc);
+  p.miss = picked.miss;
+  p.count = r.cache.list.length;
+  p.index = r.cache.list.indexOf(acc) + 1;
   if (family.startsWith('accessory')) return buildLock(p, r, family);
   if (family === 'systemSmall') return buildSmall(p, r);
   if (family === 'systemMedium') return buildMedium(p, r);
