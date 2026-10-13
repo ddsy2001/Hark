@@ -1,6 +1,6 @@
 name: 网上国网（Hark 液态玻璃版）
-description: 国家电网电费余额、昨日/本月/上月用电、近 30 日与月度柱状图；支持小/中/大号与锁屏。填写网上国网账号密码即可，每 6 小时自动更新
-author: Hark（版式参考 jadkg 南方电网小组件；登录与查询基于 Yuheng0101/X 95598 脚本）
+description: 国家电网电费余额、昨日/本月/上月用电、近 30 日与月度柱状图；支持小/中/大号与锁屏。直连网上国网 App 接口，不经第三方网关；填写账号密码即可，每 6 小时自动更新
+author: Hark（版式参考 jadkg 南方电网小组件；App 协议移植自 stevenjoezhang/hass-state-grid，MIT）
 icon: https://is1-ssl.mzstatic.com/image/thumb/Purple116/v4/83/d8/8a/83d88a92-5a4d-7a2f-118c-80d795e7a9f6/AppIcon-0-0-1x_U007emarketing-0-5-0-0-sRGB-85-220.png/144x144.png
 env_schema:
   SGCC_USERNAME:
@@ -11,13 +11,17 @@ env_schema:
     name: 网上国网密码
     description: 网上国网 App 的登录密码（没设过密码的先在 App 里设置一个）
     default_value: ''
+  SGCC_SMS:
+    name: 短信验证码
+    description: 首次登录国网可能要求验证新设备，小组件提示后把收到的 6 位验证码填这里保存，再刷新小组件
+    default_value: ''
   SGCC_ACCOUNT:
     name: 户号（可选）
     description: 账号下绑了多个户号时，填要显示的户号后 4 位；留空显示第一个
     default_value: ''
   SGCC_POLICY:
     name: 国网请求策略
-    description: 网上国网会拒绝境外/代理出口（报 GB008），默认直连；直连不通再填国内节点或策略组名
+    description: 国网接口默认直连；直连不通再填国内节点或策略组名
     default_value: DIRECT
   SGCC_REFRESH:
     name: 刷新间隔（小时）
@@ -31,12 +35,12 @@ env_schema:
 scriptings:
 - generic:
     name: sgcc-hark
-    script_url: https://raw.githubusercontent.com/zhaohantao1360-hash/Hark/main/sgcc-hark.js?v=20261013-2105
+    script_url: https://raw.githubusercontent.com/zhaohantao1360-hash/Hark/main/sgcc-hark.js?v=20261013-2130
     timeout: 60
 - schedule:
     name: 网上国网定时更新
     cron: '17 */6 * * *'
-    script_url: https://raw.githubusercontent.com/zhaohantao1360-hash/Hark/main/sgcc-hark.js?v=20261013-2105
+    script_url: https://raw.githubusercontent.com/zhaohantao1360-hash/Hark/main/sgcc-hark.js?v=20261013-2130
     timeout: 60
     env:
       SGCC_SCHEDULE: 'true'
