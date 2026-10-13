@@ -4,7 +4,7 @@
  * 数据：直接按网上国网 Android App 3.2.3 协议登录查询（SM2/SM3/SM4 加密 + Turing 设备令牌），不经过任何第三方网关。
  *   协议与设备令牌算法移植自 stevenjoezhang/hass-state-grid（MIT License, Copyright (c) 2026 stevenjoezhang）。
  * 环境变量：SGCC_USERNAME / SGCC_PASSWORD（网上国网账号密码）、SGCC_SMS（新设备短信验证码，提示时再填）、
- *          SGCC_ACCOUNT（多户号时填户号后几位）、SGCC_POLICY（请求策略，默认 DIRECT）、SGCC_REFRESH（刷新间隔小时，默认 6）。
+ *          SGCC_ACCOUNT（多户号时填户号后几位）、SGCC_POLICY（请求策略，默认 DIRECT）、SGCC_REFRESH（刷新间隔小时，默认 6）、SGCC_TIERS（阶梯年用电分界，北京默认 2880,4800）。
  */
 
 const K = { data: 'sgcc_hark_data2', err: 'sgcc_hark_err2', lock: 'sgcc_hark_lock', dev: 'sgcc_app_dev', sess: 'sgcc_app_sess', sms: 'sgcc_app_sms' };
@@ -470,7 +470,7 @@ async function queryAccount(app, a) {
     if (num(bal.historyOwe) > 0) owe = num(bal.historyOwe);
   }
   return {
-    userInfo: { consNo_dst: a.src, consName_dst: a.name, orgName: a.orgName },
+    userInfo: { consNo_dst: a.src, consName_dst: a.name, orgName: a.orgName, proNo: a.pro },
     eleBill: { sumMoney, historyOwe: owe, prepayBal: bal ? num(bal.prepayBal) : NaN, date: bal ? clean(bal.date || bal.amtTime) : '' },
     dayElecQuantity31: { sevenEleList: daily },
     monthElecQuantity: { mothEleList: bills, dataInfo: { totalEleNum: yearPq, totalEleCost: yearAmt } },
@@ -527,18 +527,33 @@ function parse(acc) {
   const sum = num(bill.sumMoney);
   const owe = num(bill.historyOwe) > 0 || sum < 0;
   const last = uniq[uniq.length - 1] || null;
-  // 预计可用天数：余额 ÷（近 7 天日均电量 × 最近账单单价）
+  const info = mq.dataInfo || {};
+  // 阶梯电价（年度累计）：已出账月份 + 还没出账的日用电
+  const pro = clean(u.proNo);
+  const tierEnv = clean((globalThis.__sgEnv || {}).SGCC_TIERS);
+  const tiers = (tierEnv || (!pro || pro === '11102' ? '2880,4800' : '')).split(/[,，\s]+/).map(Number).filter((x) => x > 0);
+  const yearKey = String(now.getFullYear());
+  const settled = months.filter((x) => x.key.startsWith(yearKey));
+  const lastSet = settled.length ? settled[settled.length - 1].key : '';
+  let yearTotal = settled.reduce((a, b) => a + b.v, 0);
+  if (!settled.length && Number.isFinite(num(info.totalEleNum))) yearTotal = num(info.totalEleNum);
+  uniq.forEach((x) => { if (x.key.startsWith(yearKey) && x.key.slice(0, 6) > lastSet) yearTotal += x.v; });
+  let tier = null;
+  if (tiers.length >= 2 && yearTotal > 0) {
+    const lv = yearTotal <= tiers[0] ? 1 : yearTotal <= tiers[1] ? 2 : 3;
+    tier = { lv, total: yearTotal, left: lv < 3 ? tiers[lv - 1] - yearTotal : 0, price: !tierEnv ? [0.4883, 0.5383, 0.7883][lv - 1] : NaN };
+  }
+  // 预计可用天数：余额 ÷（近 7 天日均电量 × 单价）
   let estDays = num(bill.dayNum);
   if (!Number.isFinite(estDays) && !owe && Number.isFinite(sum) && sum > 0) {
     const recent = uniq.slice(-7);
     const avg = recent.length ? recent.reduce((a, b) => a + b.v, 0) / recent.length : NaN;
     const priced = months.filter((x) => x.v > 0 && x.cost > 0).pop();
-    const price = priced ? priced.cost / priced.v : 0.4883;
+    const price = tier && Number.isFinite(tier.price) ? tier.price : priced ? priced.cost / priced.v : 0.4883;
     if (avg > 0) estDays = Math.floor(sum / (avg * price));
   }
-  const info = mq.dataInfo || {};
   return {
-    name: clean(u.consName_dst || u.consName),
+    name: (() => { const n = clean(u.consName_dst || u.consName); return /[:：]/.test(n) || n.length > 12 ? '' : n; })(),
     consNo: clean(u.consNo_dst || u.consNo),
     org: clean(u.orgName),
     balance: Number.isFinite(sum) ? Math.abs(sum) : NaN,
@@ -552,6 +567,7 @@ function parse(acc) {
     lastMonth,
     yearUse: num(info.totalEleNum),
     yearCost: num(info.totalEleCost),
+    tier,
     daily: uniq.slice(-30),
     months: months.filter((x) => x.key.startsWith(String(now.getFullYear()))),
   };
@@ -686,11 +702,20 @@ function header(p, ts, compact) {
   ], { gap: 5, height: 20 });
 }
 
-function statCell(sym, tint, label, value, unit, sub) {
+const TIER_CN = ['', '一阶', '二阶', '三阶'];
+function tierText(p, short) {
+  const t = p.tier;
+  if (!t) return '';
+  if (t.lv >= 3) return short ? '三阶' : `三阶 · 年累计 ${fmt(t.total, 0)} 度`;
+  return short ? TIER_CN[t.lv] : `${TIER_CN[t.lv]} · 距${TIER_CN[t.lv + 1]} ${fmt(Math.max(0, t.left), 0)} 度`;
+}
+function tierColor(p) { return !p.tier ? C.faint : p.tier.lv === 1 ? C.ok : p.tier.lv === 2 ? C.warn : C.fail; }
+
+function statCell(sym, tint, label, value, unit, sub, subColor) {
   return glass([
     row([icon(sym, tint, 10), T(label, 10, C.dim, 'medium')], { gap: 3 }),
     row([T(value, 17, C.text, 'bold'), T(unit, 9, C.dim, 'medium')], { alignItems: 'end', gap: 2 }),
-    ...(sub ? [T(sub, 8, C.faint)] : []),
+    ...(sub ? [T(sub, 8, subColor || C.faint)] : []),
   ], { flex: 1, gap: 2, padding: [6, 8], borderRadius: 13 });
 }
 
@@ -732,7 +757,7 @@ function buildSmall(p, r) {
       spacer(),
       row([
         col([T(`昨日 ${mmdd(p.yesterdayKey)}`, 8, C.faint), row([T(fmt(p.yesterday), 13, C.text, 'bold'), T('度', 8, C.dim)], { alignItems: 'end', gap: 1 })], { gap: 0, flex: 1 }),
-        col([T('本月', 8, C.faint), row([T(fmt(p.monthUse), 13, C.text, 'bold'), T('度', 8, C.dim)], { alignItems: 'end', gap: 1 })], { gap: 0, flex: 1 }),
+        col([row([T('本月', 8, C.faint), ...(p.tier ? [T(tierText(p, true), 8, tierColor(p), 'semibold')] : [])], { gap: 3 }), row([T(fmt(p.monthUse), 13, C.text, 'bold'), T('度', 8, C.dim)], { alignItems: 'end', gap: 1 })], { gap: 0, flex: 1 }),
       ], { gap: 6 }),
       e || { type: 'image', src: barsSvg(vals, 140, 20), width: 130, height: 20 },
     ],
@@ -752,7 +777,7 @@ function buildMedium(p, r) {
       row([
         glass([balanceBlock(p, 22)], { padding: [6, 9], borderRadius: 13, width: 104 }),
         statCell('sun.max.fill', C.warn, '昨日', fmt(p.yesterday), '度', mmdd(p.yesterdayKey)),
-        statCell('calendar', C.blue, '本月', fmt(p.monthUse), '度', ''),
+        statCell('calendar', C.blue, '本月', fmt(p.monthUse), '度', tierText(p), tierColor(p)),
         statCell('clock.arrow.circlepath', '#BF5AF2', '上月', fmt(lm ? lm.v : NaN, 0), '度', lm && Number.isFinite(lm.cost) ? `¥${money(lm.cost)}` : ''),
       ], { gap: 5, height: 58 }),
       glass([
@@ -789,7 +814,7 @@ function buildLarge(p, r) {
         glass([balanceBlock(p, 28)], { padding: [8, 10], borderRadius: 14, flex: 1 }),
         col([
           row([statCell('sun.max.fill', C.warn, '昨日', fmt(p.yesterday), '度', mmdd(p.yesterdayKey)),
-            statCell('calendar', C.blue, '本月', fmt(p.monthUse), '度', '')], { gap: 6 }),
+            statCell('calendar', C.blue, '本月', fmt(p.monthUse), '度', tierText(p), tierColor(p))], { gap: 6 }),
           row([statCell('clock.arrow.circlepath', '#BF5AF2', '上月', fmt(lm ? lm.v : NaN, 0), '度', lm && Number.isFinite(lm.cost) ? `¥${money(lm.cost)}` : ''),
             statCell('chart.bar.fill', C.teal, '今年', fmt(p.yearUse, 0), '度', Number.isFinite(p.yearCost) ? `¥${money(p.yearCost)}` : '')], { gap: 6 }),
         ], { gap: 6, flex: 1.6 }),
@@ -814,7 +839,7 @@ function buildLarge(p, r) {
 function buildLock(p, r, family) {
   const bal = `${p.owe ? '欠' : ''}¥${money(p.balance)}`;
   if (family === 'accessoryInline') {
-    return { type: 'widget', children: [{ type: 'text', text: `⚡ ${bal} · 昨日 ${fmt(p.yesterday)}度`, maxLines: 1, minScale: 0.6 }] };
+    return { type: 'widget', children: [{ type: 'text', text: `⚡ ${bal} · 昨日 ${fmt(p.yesterday)}度${p.tier ? ' · ' + tierText(p, true) : ''}`, maxLines: 1, minScale: 0.6 }] };
   }
   if (family === 'accessoryCircular') {
     return {
@@ -831,7 +856,7 @@ function buildLock(p, r, family) {
     children: [
       row([{ type: 'image', src: 'sf-symbol:bolt.fill', width: 10, height: 10 }, { type: 'text', text: `电费 ${bal}`, font: { size: 'caption1', weight: 'semibold' } }, spacer()], { gap: 4 }),
       { type: 'text', text: `昨日 ${fmt(p.yesterday)}度 · 本月 ${fmt(p.monthUse)}度`, font: { size: 'caption2' }, opacity: 0.8, maxLines: 1, minScale: 0.6 },
-      { type: 'text', text: Number.isFinite(p.days) ? `预计可用 ${fmt(p.days, 0)} 天` : `更新 ${updText(r.cache.ts)}`, font: { size: 'caption2' }, opacity: 0.7, maxLines: 1, minScale: 0.6 },
+      { type: 'text', text: [Number.isFinite(p.days) ? `可用 ${fmt(p.days, 0)} 天` : `更新 ${updText(r.cache.ts)}`, tierText(p, true)].filter(Boolean).join(' · '), font: { size: 'caption2' }, opacity: 0.7, maxLines: 1, minScale: 0.6 },
     ],
   };
 }
@@ -845,6 +870,7 @@ export default async function (ctx) {
     }
     return;
   }
+  globalThis.__sgEnv = env;
   const family = ctx.widgetFamily || 'systemMedium';
   const r = await getData(ctx, false);
   if (!r.configured) return message('还没填写账号', '到 Egern「工具 → 模块 → 网上国网」里填写网上国网的手机号和密码，保存后刷新小组件。');
