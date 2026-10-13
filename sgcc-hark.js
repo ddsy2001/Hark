@@ -683,11 +683,19 @@ function barsSvg(vals, w, h, opts = {}) {
     const bh = Math.max(2, (v / max) * (h - 2));
     const x = i * (bw + gap);
     const hot = v === max && v > 0;
-    s += `<rect x='${x.toFixed(1)}' y='${(h - bh).toFixed(1)}' width='${bw.toFixed(1)}' height='${bh.toFixed(1)}' rx='${Math.min(3, bw / 2).toFixed(1)}' fill='${hot ? (opts.hot || '#FF9F0A') : 'url(#g)'}'${i === n - 1 && !hot ? " fill-opacity='1'" : ''}/>`;
+    const latest = i === n - 1;
+    const fill = latest ? (opts.latest || '#30D158') : hot ? (opts.hot || '#FF9F0A') : 'url(#g)';
+    const op = latest || hot ? 1 : 0.55 + 0.4 * (i / Math.max(1, n - 1));
+    s += `<rect x='${x.toFixed(1)}' y='${(h - bh).toFixed(1)}' width='${bw.toFixed(1)}' height='${bh.toFixed(1)}' rx='${Math.min(3, bw / 2).toFixed(1)}' fill='${fill}' fill-opacity='${op.toFixed(2)}'/>`;
   });
   const ay = h - (avg / max) * (h - 2);
   s += `<line x1='0' y1='${ay.toFixed(1)}' x2='${w}' y2='${ay.toFixed(1)}' stroke='#8E8E93' stroke-opacity='0.55' stroke-width='1' stroke-dasharray='3 3'/></svg>`;
   return svgUri(s);
+}
+
+function dot(color) { return { type: 'stack', width: 6, height: 6, borderRadius: 3, backgroundColor: color, children: [] }; }
+function legend(peakText) {
+  return row([dot('#30D158'), T('最新', 8, C.faint), dot('#FF9F0A'), T(peakText, 8, C.faint)], { gap: 3 });
 }
 
 function header(p, ts, compact) {
@@ -781,9 +789,10 @@ function buildMedium(p, r) {
         statCell('clock.arrow.circlepath', '#BF5AF2', '上月', fmt(lm ? lm.v : NaN, 0), '度', lm && Number.isFinite(lm.cost) ? `¥${money(lm.cost)}` : ''),
       ], { gap: 5, height: 58 }),
       glass([
-        row([T(`近${list.length || 14}日用电`, 9, C.dim, 'medium'), spacer(), ...(e ? [e] : [T(`峰值 ${fmt(peak)} 度 · 虚线为均值`, 8, C.faint)])], { gap: 4 }),
-        { type: 'image', src: barsSvg(vals, 300, 22), width: 300, height: 22 },
-      ], { gap: 3, padding: [5, 8], borderRadius: 13 }),
+        row([T(`近${list.length || 14}日用电`, 9, C.dim, 'medium'), spacer(), ...(e ? [e] : [legend(`峰值 ${fmt(peak)}`)])], { gap: 4 }),
+        { type: 'image', src: barsSvg(vals, 300, 18), width: 300, height: 18 },
+        row([T(mmdd(list[0] && list[0].key), 7, C.faint), spacer(), T(list.length ? `${mmdd(list[list.length - 1].key)} 最新` : '', 7, '#30D158', 'medium')], { height: 9 }),
+      ], { gap: 2, padding: [5, 8], borderRadius: 13 }),
     ],
   };
 }
@@ -821,14 +830,14 @@ function buildLarge(p, r) {
       ], { gap: 6, height: 110 }),
       glass([
         row([icon('chart.bar.xaxis', C.brand, 10), T(`近${list.length || 30}日用电`, 10, C.text, 'semibold'), spacer(),
-          T(`日均 ${fmt(avg)} · 峰值 ${fmt(peak)} 度`, 9, C.dim)], { gap: 4 }),
+          T(`日均 ${fmt(avg)}`, 9, C.dim), legend(`峰值 ${fmt(peak)}`)], { gap: 4 }),
         { type: 'image', src: barsSvg(vals, 300, 38), width: 300, height: 38 },
-        row([T(mmdd(list[0] && list[0].key), 8, C.faint), spacer(), T(mmdd(list.length ? list[list.length - 1].key : ''), 8, C.faint)]),
+        row([T(mmdd(list[0] && list[0].key), 8, C.faint), spacer(), T(list.length ? `${mmdd(list[list.length - 1].key)} 最新` : '', 8, '#30D158', 'medium')]),
       ], { gap: 4, padding: [8, 10], borderRadius: 14 }),
       glass([
         row([icon('calendar.badge.clock', '#BF5AF2', 10), T(`${new Date().getFullYear()} 年月度用电`, 10, C.text, 'semibold'), spacer(),
           T(mv.length ? `共 ${mv.length} 个月` : '暂无', 9, C.dim)], { gap: 4 }),
-        { type: 'image', src: barsSvg(mv, 300, 28, { top: '#BF5AF2', bottom: '#5E5CE6', hot: '#FF9F0A' }), width: 300, height: 28 },
+        { type: 'image', src: barsSvg(mv, 300, 28, { top: '#BF5AF2', bottom: '#5E5CE6', hot: '#FF9F0A', latest: '#DA8FFF' }), width: 300, height: 28 },
         row([T('1月', 8, C.faint), spacer(), T(`${mv.length}月`, 8, C.faint)]),
       ], { gap: 4, padding: [8, 10], borderRadius: 14 }),
       e || row([icon('building.2', C.faint, 9), T(p.org || '国家电网', 8, C.faint), spacer(), T(p.billDate ? `余额截至 ${p.billDate}` : '', 8, C.faint)], { gap: 3 }),
