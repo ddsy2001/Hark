@@ -816,7 +816,7 @@ function buildMedium(p, r) {
         statCell('clock.arrow.circlepath', '#BF5AF2', '上月', fmt(lm ? lm.v : NaN, 0), '度', lm && Number.isFinite(lm.cost) ? `¥${money(lm.cost)}` : ''),
       ], { gap: 5, height: 58 }),
       glass([
-        row([T(`近${list.length || 14}日`, 9, C.dim, 'medium'), T(rangeText(list), 8, C.faint), spacer(), ...(e ? [e] : [legend(`峰值 ${fmt(peak)}`)])], { gap: 4 }),
+        row([T(`近${list.length || 14}日`, 9, C.dim, 'medium'), T(rangeText(list), 8, C.faint), spacer(), ...(e ? [e] : [T(`日均 ${fmt(vals.length ? vals.reduce((x, y) => x + y, 0) / vals.length : NaN)}`, 8, C.dim, 'semibold'), legend(`峰值 ${fmt(peak)}`)])], { gap: 4 }),
         { type: 'image', src: barsSvg(vals, CW, 18), width: CW, height: 18 },
         (() => { const d = dayLabels(list); return axisRow(d.labels, CW, { vals, weekend: d.weekend, strong: d.strong }); })(),
       ], { gap: 2, padding: [5, 8], borderRadius: 13 }),
