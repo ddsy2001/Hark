@@ -694,6 +694,7 @@ function barsSvg(vals, w, h, opts = {}) {
 }
 
 // 柱子下方逐根标注，宽度和 barsSvg 的柱位一致
+const CW = 318; // 图表宽度，贴合中/大号卡片内宽
 function axisRow(labels, w, opts = {}) {
   const n = labels.length;
   if (!n) return row([], { height: 9 });
@@ -816,8 +817,8 @@ function buildMedium(p, r) {
       ], { gap: 5, height: 58 }),
       glass([
         row([T(`近${list.length || 14}日`, 9, C.dim, 'medium'), T(rangeText(list), 8, C.faint), spacer(), ...(e ? [e] : [legend(`峰值 ${fmt(peak)}`)])], { gap: 4 }),
-        { type: 'image', src: barsSvg(vals, 300, 18), width: 300, height: 18 },
-        (() => { const d = dayLabels(list); return axisRow(d.labels, 300, { vals, weekend: d.weekend, strong: d.strong }); })(),
+        { type: 'image', src: barsSvg(vals, CW, 18), width: CW, height: 18 },
+        (() => { const d = dayLabels(list); return axisRow(d.labels, CW, { vals, weekend: d.weekend, strong: d.strong }); })(),
       ], { gap: 2, padding: [5, 8], borderRadius: 13 }),
     ],
   };
@@ -857,14 +858,14 @@ function buildLarge(p, r) {
       glass([
         row([icon('chart.bar.xaxis', C.brand, 10), T(`近${list.length || 30}日用电`, 10, C.text, 'semibold'), T(rangeText(list), 8, C.faint), spacer(),
           T(`日均 ${fmt(avg)}`, 9, C.dim), legend(`峰值 ${fmt(peak)}`)], { gap: 4 }),
-        { type: 'image', src: barsSvg(vals, 300, 38), width: 300, height: 38 },
-        (() => { const d = dayLabels(list); return axisRow(d.labels, 300, { vals, weekend: d.weekend, strong: d.strong, size: 6 }); })(),
+        { type: 'image', src: barsSvg(vals, CW, 46), width: CW, height: 46 },
+        (() => { const d = dayLabels(list); return axisRow(d.labels, CW, { vals, weekend: d.weekend, strong: d.strong, size: 6 }); })(),
       ], { gap: 4, padding: [8, 10], borderRadius: 14 }),
       glass([
         row([icon('calendar.badge.clock', '#BF5AF2', 10), T(`${new Date().getFullYear()} 年月度用电`, 10, C.text, 'semibold'), spacer(),
           T(mv.length ? `共 ${mv.length} 个月` : '暂无', 9, C.dim)], { gap: 4 }),
-        { type: 'image', src: barsSvg(mv, 300, 28, { top: '#BF5AF2', bottom: '#5E5CE6', hot: '#FF9F0A', latest: '#DA8FFF' }), width: 300, height: 28 },
-        axisRow(mv.map((_, i) => `${i + 1}月`), 300, { vals: mv, latest: '#DA8FFF', size: 8 }),
+        { type: 'image', src: barsSvg(mv, CW, 36, { top: '#BF5AF2', bottom: '#5E5CE6', hot: '#FF9F0A', latest: '#DA8FFF' }), width: CW, height: 36 },
+        axisRow(mv.map((_, i) => `${i + 1}月`), CW, { vals: mv, latest: '#DA8FFF', size: 8 }),
       ], { gap: 4, padding: [8, 10], borderRadius: 14 }),
       e || row([icon('building.2', C.faint, 9), T(p.org || '国家电网', 8, C.faint), spacer(), T(p.billDate ? `余额截至 ${p.billDate}` : '', 8, C.faint)], { gap: 3 }),
     ],
