@@ -17,7 +17,7 @@ env_schema:
     default_value: ''
   SGCC_ACCOUNT:
     name: 户号（可选）
-    description: 账号下绑了多个户号时，填要显示的户号后 4 位；留空显示第一个
+    description: 多个户号时填要显示的户号或尾号，也可填 #2 表示第 2 个；留空显示第一个。想不同小组件显示不同户号，在各自小组件的环境变量里填
     default_value: ''
   SGCC_TIERS:
     name: 阶梯分界（可选）
@@ -39,12 +39,12 @@ env_schema:
 scriptings:
 - generic:
     name: sgcc-hark
-    script_url: https://raw.githubusercontent.com/zhaohantao1360-hash/Hark/main/sgcc-hark.js?v=20261013-2220
+    script_url: https://raw.githubusercontent.com/zhaohantao1360-hash/Hark/main/sgcc-hark.js?v=20261013-2300
     timeout: 60
 - schedule:
     name: 网上国网定时更新
     cron: '17 */6 * * *'
-    script_url: https://raw.githubusercontent.com/zhaohantao1360-hash/Hark/main/sgcc-hark.js?v=20261013-2220
+    script_url: https://raw.githubusercontent.com/zhaohantao1360-hash/Hark/main/sgcc-hark.js?v=20261013-2300
     timeout: 60
     env:
       SGCC_SCHEDULE: 'true'
