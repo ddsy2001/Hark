@@ -693,6 +693,32 @@ function barsSvg(vals, w, h, opts = {}) {
   return svgUri(s);
 }
 
+// 柱子下方逐根标注，宽度和 barsSvg 的柱位一致
+function axisRow(labels, w, opts = {}) {
+  const n = labels.length;
+  if (!n) return row([], { height: 9 });
+  const gap = n > 20 ? 2 : 3;
+  const bw = Math.max(2, (w - gap * (n - 1)) / n);
+  const vals = opts.vals || [];
+  const max = vals.length ? Math.max(...vals) : NaN;
+  return row(labels.map((t, i) => {
+    let color = (opts.weekend && opts.weekend[i]) ? '#64D2FF99' : C.faint;
+    let weight = 'regular';
+    if (vals[i] === max && max > 0) { color = '#FF9F0A'; weight = 'semibold'; }
+    if (opts.strong && opts.strong[i]) { color = C.dim; weight = 'semibold'; }
+    if (i === n - 1) { color = opts.latest || '#30D158'; weight = 'bold'; }
+    return { type: 'stack', width: Number(bw.toFixed(2)), alignItems: 'center', children: [T(t, opts.size || 7, color, weight, { minScale: 0.4 })] };
+  }), { gap, height: opts.size ? opts.size + 3 : 10, width: w });
+}
+function dayLabels(list) {
+  return {
+    labels: list.map((x) => String(Number(x.key.slice(6, 8)))),
+    weekend: list.map((x) => { const d = new Date(Number(x.key.slice(0, 4)), Number(x.key.slice(4, 6)) - 1, Number(x.key.slice(6, 8))).getDay(); return d === 0 || d === 6; }),
+    strong: list.map((x) => x.key.slice(6, 8) === '01'),
+  };
+}
+function rangeText(list) { return list.length ? `${mmdd(list[0].key)}–${mmdd(list[list.length - 1].key)}` : ''; }
+
 function dot(color) { return { type: 'stack', width: 6, height: 6, borderRadius: 3, backgroundColor: color, children: [] }; }
 function legend(peakText) {
   return row([dot('#30D158'), T('最新', 8, C.faint), dot('#FF9F0A'), T(peakText, 8, C.faint)], { gap: 3 });
@@ -789,9 +815,9 @@ function buildMedium(p, r) {
         statCell('clock.arrow.circlepath', '#BF5AF2', '上月', fmt(lm ? lm.v : NaN, 0), '度', lm && Number.isFinite(lm.cost) ? `¥${money(lm.cost)}` : ''),
       ], { gap: 5, height: 58 }),
       glass([
-        row([T(`近${list.length || 14}日用电`, 9, C.dim, 'medium'), spacer(), ...(e ? [e] : [legend(`峰值 ${fmt(peak)}`)])], { gap: 4 }),
+        row([T(`近${list.length || 14}日`, 9, C.dim, 'medium'), T(rangeText(list), 8, C.faint), spacer(), ...(e ? [e] : [legend(`峰值 ${fmt(peak)}`)])], { gap: 4 }),
         { type: 'image', src: barsSvg(vals, 300, 18), width: 300, height: 18 },
-        row([T(mmdd(list[0] && list[0].key), 7, C.faint), spacer(), T(list.length ? `${mmdd(list[list.length - 1].key)} 最新` : '', 7, '#30D158', 'medium')], { height: 9 }),
+        (() => { const d = dayLabels(list); return axisRow(d.labels, 300, { vals, weekend: d.weekend, strong: d.strong }); })(),
       ], { gap: 2, padding: [5, 8], borderRadius: 13 }),
     ],
   };
@@ -829,16 +855,16 @@ function buildLarge(p, r) {
         ], { gap: 6, flex: 1.6 }),
       ], { gap: 6, height: 110 }),
       glass([
-        row([icon('chart.bar.xaxis', C.brand, 10), T(`近${list.length || 30}日用电`, 10, C.text, 'semibold'), spacer(),
+        row([icon('chart.bar.xaxis', C.brand, 10), T(`近${list.length || 30}日用电`, 10, C.text, 'semibold'), T(rangeText(list), 8, C.faint), spacer(),
           T(`日均 ${fmt(avg)}`, 9, C.dim), legend(`峰值 ${fmt(peak)}`)], { gap: 4 }),
         { type: 'image', src: barsSvg(vals, 300, 38), width: 300, height: 38 },
-        row([T(mmdd(list[0] && list[0].key), 8, C.faint), spacer(), T(list.length ? `${mmdd(list[list.length - 1].key)} 最新` : '', 8, '#30D158', 'medium')]),
+        (() => { const d = dayLabels(list); return axisRow(d.labels, 300, { vals, weekend: d.weekend, strong: d.strong, size: 6 }); })(),
       ], { gap: 4, padding: [8, 10], borderRadius: 14 }),
       glass([
         row([icon('calendar.badge.clock', '#BF5AF2', 10), T(`${new Date().getFullYear()} 年月度用电`, 10, C.text, 'semibold'), spacer(),
           T(mv.length ? `共 ${mv.length} 个月` : '暂无', 9, C.dim)], { gap: 4 }),
         { type: 'image', src: barsSvg(mv, 300, 28, { top: '#BF5AF2', bottom: '#5E5CE6', hot: '#FF9F0A', latest: '#DA8FFF' }), width: 300, height: 28 },
-        row([T('1月', 8, C.faint), spacer(), T(`${mv.length}月`, 8, C.faint)]),
+        axisRow(mv.map((_, i) => `${i + 1}月`), 300, { vals: mv, latest: '#DA8FFF', size: 8 }),
       ], { gap: 4, padding: [8, 10], borderRadius: 14 }),
       e || row([icon('building.2', C.faint, 9), T(p.org || '国家电网', 8, C.faint), spacer(), T(p.billDate ? `余额截至 ${p.billDate}` : '', 8, C.faint)], { gap: 3 }),
     ],
