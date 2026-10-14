@@ -1076,24 +1076,17 @@ export default async function (ctx) {
     const notifiedMap = readLog(ctx, notifyStoreKey);
 
     let slotKey = '';
-    const cronStr = clean(ctx.cron);
     const rawTime = clean(env.SGCC_NOTIFY_TIME);
     if (rawTime.toLowerCase() === 'now' || rawTime === '立即') {
       // 填“立即/now”时当天仅触发 1 次测试，避免每分钟重复弹窗
       const k = `${todayKey}_manual_test`;
       if (!notifiedMap[k]) slotKey = k;
-    } else if (cronStr && cronStr !== '* * * * *') {
-      // 用户在 compat_arguments 自定义了特定 cron 表达式
-      const k = `${todayKey}_cron_${String(now.h).padStart(2, '0')}:${String(now.min).padStart(2, '0')}`;
-      if (!notifiedMap[k]) slotKey = k;
     } else {
-      // 按模块环境变量 SGCC_NOTIFY_TIME（精确到 HH:MM）匹配，留 15 分钟休眠唤醒补偿窗口
+      // 严格按模块环境变量 SGCC_NOTIFY_TIME（精确到 HH:MM）匹配当前时:分
       const times = parseNotifyTimes(rawTime);
-      const nowMins = now.h * 60 + now.min;
       for (const t of times) {
-        const targetMins = t.h * 60 + t.m;
         const k = `${todayKey}_${t.key}`;
-        if (nowMins >= targetMins && nowMins <= targetMins + 15 && !notifiedMap[k]) {
+        if (now.h === t.h && now.min === t.m && !notifiedMap[k]) {
           slotKey = k;
           break;
         }
