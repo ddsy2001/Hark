@@ -451,16 +451,18 @@ async function queryAccount(app, a, prevAcc) {
     console.log(`[SGCC] 户号${a.consNo} 余额接口暂不可用([${e.code}] ${e.message})，沿用缓存余额`);
   }
 
-  // 2. 查询日用电量明细接口 (c11/f01)；若上月历史数据已在缓存中则直接复用，减少一半请求避免触发 S1009
+  // 2. 查询日用电量明细接口 (c11/f01)；上月数据若已完整（含月末最后一天）在缓存中则直接复用，减少请求避免触发 S1009
   let daily = [];
   let monthTotal = NaN;
-  const curYmKey = `${n.y}${String(n.m).padStart(2, '0')}`;
+  let dailyStale = false;
   let lastY = n.y, lastM = n.m - 1; if (lastM < 1) { lastM += 12; lastY -= 1; }
   const lastYmKey = `${lastY}${String(lastM).padStart(2, '0')}`;
+  const lastMonthEndKey = `${lastYmKey}${String(new Date(Date.UTC(lastY, lastM, 0)).getUTCDate()).padStart(2, '0')}`;
   const cachedLastMonthDays = prevDaily.filter((x) => clean(x.day).replace(/\D/g, '').startsWith(lastYmKey));
+  const lastMonthComplete = cachedLastMonthDays.some((x) => clean(x.day).replace(/\D/g, '').slice(0, 8) === lastMonthEndKey);
 
   for (let off = 0; off < 2; off++) {
-    if (off === 1 && cachedLastMonthDays.length >= 15) {
+    if (off === 1 && lastMonthComplete) {
       daily = daily.concat(cachedLastMonthDays);
       continue;
     }
@@ -477,10 +479,13 @@ async function queryAccount(app, a, prevAcc) {
           console.log(`[SGCC] 户号${a.consNo} 日用电接口繁忙([${e.code}] ${e.message})，保留历史日用电图表缓存`);
           daily = prevDaily.slice();
           monthTotal = num(prevAcc && prevAcc.monthTotal);
+          dailyStale = true;
           break;
         }
         throw e;
       }
+      // 上月查询失败时退回缓存里的上月数据，避免图表缺一截
+      if (cachedLastMonthDays.length) daily = daily.concat(cachedLastMonthDays);
     }
   }
 
@@ -530,6 +535,7 @@ async function queryAccount(app, a, prevAcc) {
     dayElecQuantity31: { sevenEleList: daily },
     monthElecQuantity: { mothEleList: bills, dataInfo: { totalEleNum: yearPq, totalEleCost: yearAmt } },
     monthTotal,
+    dailyStale,
   };
 }
 
@@ -657,6 +663,7 @@ function parse(acc) {
     tier,
     daily: uniq.slice(-30),
     months: months.filter((x) => x.key.startsWith(String(now.getFullYear()))),
+    dailyStale: Boolean(acc.dailyStale),
   };
 }
 
@@ -666,6 +673,7 @@ function friendly(e) {
   const msg = clean((e && e.message) || e).replace(/^Error:\s*/, '');
   if (code === 'RK008') return '国网要求安全验证（RK008）：先在官方网上国网 App 登录一次，过几小时再刷新';
   if (code === '0100' || /密码错误/.test(msg)) return '账号或密码错误（连错 5 次会锁 30 分钟），请检查模块里的账号密码';
+  if (code === 'S1009' || /系统正忙/.test(msg)) return '国网服务器繁忙（S1009），稍后会自动重试';
   return msg || '查询失败';
 }
 
@@ -932,14 +940,17 @@ function message(title, body, ts) {
   };
 }
 
-function errLine(r) {
-  if (!r.error && !r.busy) return null;
+function errLine(r, p) {
+  if (!r.error && !r.busy) {
+    if (p && p.dailyStale) return row([icon('clock.badge.exclamationmark', C.warn, 9), T('余额已更新，日用电国网繁忙暂未更新', 8, C.warn)], { gap: 3 });
+    return null;
+  }
   return row([icon('exclamationmark.circle.fill', C.warn, 9), T(r.busy ? '正在更新…' : `更新失败，显示缓存：${r.error}`, 8, C.warn)], { gap: 3 });
 }
 
 function buildSmall(p, r) {
   const vals = p.daily.slice(-10).map((x) => x.v);
-  const e = errLine(r);
+  const e = errLine(r, p);
   return {
     type: 'widget', padding: 12, gap: 5, backgroundGradient: bg(),
     children: [
@@ -960,7 +971,7 @@ function buildMedium(p, r) {
   const vals = list.map((x) => x.v);
   const peak = vals.length ? Math.max(...vals) : NaN;
   const lm = p.lastMonth;
-  const e = errLine(r);
+  const e = errLine(r, p);
   return {
     type: 'widget', padding: 12, gap: 6, backgroundGradient: bg(),
     children: [
@@ -997,7 +1008,7 @@ function buildLarge(p, r) {
   const peak = vals.length ? Math.max(...vals) : NaN;
   const mv = monthBars(p);
   const lm = p.lastMonth;
-  const e = errLine(r);
+  const e = errLine(r, p);
   return {
     type: 'widget', padding: 12, gap: 7, backgroundGradient: bg(),
     children: [
@@ -1125,7 +1136,9 @@ function sendDailyNotify(ctx, r, env, { allowLowWarn = true } = {}) {
   const mCostStr = Number.isFinite(p.monthCost) ? `（约 ¥${money(p.monthCost)}）` : '';
   const mStr = Number.isFinite(p.monthUse) ? `本月累计 ${fmt(p.monthUse)} 度${mCostStr}` : '';
   const tStr = tierText(p, false);
-  const errNote = r.error ? `⚠️ 实时刷新失败(当前为 ${updText(r.cache && r.cache.ts)} 缓存): ${r.error}` : '';
+  const errNote = r.error
+    ? `⚠️ 实时刷新失败(当前为 ${updText(r.cache && r.cache.ts)} 缓存): ${r.error}`
+    : (p.dailyStale ? '⚠️ 国网日用电接口繁忙，昨日用电为上次缓存数据' : '');
 
   const title = showLowWarn
     ? (p.owe ? '⚠️ 网上国网 · 电费欠费提醒' : '⚠️ 网上国网 · 电费余额不足提醒')
@@ -1148,26 +1161,11 @@ function sendDailyNotify(ctx, r, env, { allowLowWarn = true } = {}) {
   }
 }
 
-function resolveEnv(ctx) {
-  const raw = Object.assign({}, ctx.env || {});
-  const syncKey = 'sgcc_hark_env_sync';
-  const saved = readLog(ctx, syncKey);
-  const keys = ['SGCC_USERNAME', 'SGCC_PASSWORD', 'SGCC_SMS', 'SGCC_ACCOUNT', 'SGCC_NOTIFY_ENABLED', 'SGCC_NOTIFY_TIME', 'SGCC_LOW_BALANCE', 'SGCC_LOW_NOTIFY_MAX', 'SGCC_PRICE', 'SGCC_TIERS', 'SGCC_POLICY', 'SGCC_REFRESH'];
-  let changed = false;
-  for (const k of keys) {
-    if (clean(raw[k]) !== '') {
-      if (saved[k] !== raw[k]) { saved[k] = raw[k]; changed = true; }
-    } else if (clean(saved[k]) !== '') {
-      raw[k] = saved[k];
-    }
-  }
-  if (changed) writeLog(ctx, syncKey, saved);
-  return raw;
-}
-
 export default async function (ctx) {
-  const env = resolveEnv(ctx);
+  const env = ctx.env || {};
   globalThis.__sgEnv = env;
+  // 清理旧版本 resolveEnv 留下的明文配置备份（含密码）
+  try { const old = ctx.storage.getJSON('sgcc_hark_env_sync'); if (old && typeof old === 'object' && Object.keys(old).length) ctx.storage.setJSON('sgcc_hark_env_sync', {}); } catch (_) {}
 
   // 1. 每日定时电费通知任务（支持精确到时:分，如 08:00、08:30）
   if (clean(env.SGCC_NOTIFY_TASK) === 'true') {
@@ -1197,11 +1195,14 @@ export default async function (ctx) {
       const k = `${todayKey}_manual_test`;
       if (!notifiedMap[k]) slotKey = k;
     } else {
-      // 严格按模块环境变量 SGCC_NOTIFY_TIME（精确到 HH:MM）匹配当前时:分
+      // 按 SGCC_NOTIFY_TIME（HH:MM）匹配；iOS 后台任务常会延迟几分钟，允许设定时间后 30 分钟内补发，
+      // 每个时段当天只发一次（下方会先写入已发标记），不会重复弹窗
       const times = parseNotifyTimes(rawTime);
+      const nowMins = now.h * 60 + now.min;
       for (const t of times) {
         const k = `${todayKey}_${t.key}`;
-        if (now.h === t.h && now.min === t.m && !notifiedMap[k]) {
+        const target = t.h * 60 + t.m;
+        if (nowMins >= target && nowMins <= target + 30 && !notifiedMap[k]) {
           slotKey = k;
           break;
         }
