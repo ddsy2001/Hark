@@ -408,6 +408,11 @@ class SgApp {
       const resp = await this.post(path, payload, { authed: true });
       try { return SgApp.check(resp); }
       catch (e) {
+        console.log(`[SGCC] 接口 ${path} 响应异常(第${i + 1}次): [${e.code}] ${e.message}`);
+        if (i === 0 && (e.code === 'S1009' || /系统正忙/.test(e.message))) {
+          await new Promise((r) => setTimeout(r, 1000));
+          continue;
+        }
         if (!['-200', '-201'].includes(e.code) || i) throw e;
         this.st(this.sk(K.sess), {}); this.sess = null; await this.ensure();
       }
@@ -428,19 +433,58 @@ function consType(a) { return a.elec === '04' || (a.elec === '02' && a.pro === '
 function ymd(y, m, d) { return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`; }
 function monthRange(y, m) { return [ymd(y, m, 1), ymd(y, m, new Date(Date.UTC(y, m, 0)).getUTCDate())]; }
 
-async function queryAccount(app, a) {
+async function queryAccount(app, a, prevAcc) {
   const n = cnNow();
-  const daily = [];
+  const prevBill = (prevAcc && prevAcc.eleBill) || {};
+  const prevDaily = (prevAcc && prevAcc.dayElecQuantity31 && Array.isArray(prevAcc.dayElecQuantity31.sevenEleList))
+    ? prevAcc.dayElecQuantity31.sevenEleList
+    : [];
+  const prevMonthQ = (prevAcc && prevAcc.monthElecQuantity) || null;
+
+  // 1. 优先查询电费余额接口 (c16/f01，与网上国网 App 首页同源，不受日用电账单服务 S1009 繁忙影响)
+  let bal = null;
+  try {
+    const d = await app.authed(P_BAL, { serviceCode: '0101143', source: 'app', target: a.pro, data: { srvCode: '', serialNo: '', channelCode: '0902', funcCode: 'A1007200', acctId: app.sess.userId, userName: 'acctid01', promotType: '1', promotCode: '1', userAccountId: app.sess.userId, list: [{ consNoSrc: a.src, proCode: a.pro, sceneType: a.elec, consNo: a.consNo, orgNo: a.org }] } });
+    bal = (Array.isArray(d.list) ? d.list : []).find((x) => x && typeof x === 'object') || null;
+  } catch (e) {
+    if (['-200', '-201', '4006', 'RK008'].includes(e.code)) throw e;
+    console.log(`[SGCC] 户号${a.consNo} 余额接口暂不可用([${e.code}] ${e.message})，沿用缓存余额`);
+  }
+
+  // 2. 查询日用电量明细接口 (c11/f01)；若上月历史数据已在缓存中则直接复用，减少一半请求避免触发 S1009
+  let daily = [];
   let monthTotal = NaN;
+  const curYmKey = `${n.y}${String(n.m).padStart(2, '0')}`;
+  let lastY = n.y, lastM = n.m - 1; if (lastM < 1) { lastM += 12; lastY -= 1; }
+  const lastYmKey = `${lastY}${String(lastM).padStart(2, '0')}`;
+  const cachedLastMonthDays = prevDaily.filter((x) => clean(x.day).replace(/\D/g, '').startsWith(lastYmKey));
+
   for (let off = 0; off < 2; off++) {
+    if (off === 1 && cachedLastMonthDays.length >= 15) {
+      daily = daily.concat(cachedLastMonthDays);
+      continue;
+    }
     let y = n.y, m = n.m - off; if (m < 1) { m += 12; y -= 1; }
     const [s, e] = monthRange(y, m);
     try {
       const d = await app.authed(P_DAILY, { serviceCode: 'BCP_000026', source: 'app', target: a.pro, data: { acctId: 'acctid01', channelCode: 'SGAPP', consNo: a.src, consNosrc: a.src, endTime: e, consType: consType(a), funcCode: 'ALIPAY_01', orgNo: a.org, proCode: a.pro, promotCode: '1', promotType: '1', serialNo: '', srvCode: '', startTime: s, userName: 'acctid01' } });
       (Array.isArray(d.sevenEleList) ? d.sevenEleList : []).forEach((x) => daily.push({ day: x.day, dayElePq: x.dayElePq, dayEleCost: x.dayEleAmt != null ? x.dayEleAmt : x.thisAmt != null ? x.thisAmt : x.dayEleCost != null ? x.dayEleCost : x.amt }));
       if (off === 0) monthTotal = num(d.totalPq);
-    } catch (e) { if (off === 0 && !daily.length) throw e; }
+    } catch (e) {
+      if (['-200', '-201', '4006', 'RK008'].includes(e.code)) throw e;
+      if (off === 0) {
+        if (prevDaily.length || bal) {
+          console.log(`[SGCC] 户号${a.consNo} 日用电接口繁忙([${e.code}] ${e.message})，保留历史日用电图表缓存`);
+          daily = prevDaily.slice();
+          monthTotal = num(prevAcc && prevAcc.monthTotal);
+          break;
+        }
+        throw e;
+      }
+    }
   }
+
+  // 3. 查询月度账单接口 (c51/f04)
   let bills = [], yearPq = NaN, yearAmt = NaN;
   for (const y of [n.y, n.y - 1]) {
     try {
@@ -457,15 +501,19 @@ async function queryAccount(app, a) {
       if (y === n.y) { yearPq = num(d.yearPq); yearAmt = num(d.yearAmt); if (!Number.isFinite(yearPq) && list.length) yearPq = list.reduce((s, x) => s + (x.monthEleNum || 0), 0); if (!Number.isFinite(yearAmt) && list.length) yearAmt = list.reduce((s, x) => s + (x.monthEleCost || 0), 0); }
       bills = list.concat(bills);
       if (list.length && y === n.y && n.m > 1) break;
-    } catch (e) { if (['-200', '-201', '4006', 'RK008'].includes(e.code)) throw e; break; }
+    } catch (e) {
+      if (['-200', '-201', '4006', 'RK008'].includes(e.code)) throw e;
+      if (prevMonthQ && Array.isArray(prevMonthQ.mothEleList) && prevMonthQ.mothEleList.length) {
+        bills = prevMonthQ.mothEleList;
+        yearPq = num(prevMonthQ.dataInfo && prevMonthQ.dataInfo.totalEleNum);
+        yearAmt = num(prevMonthQ.dataInfo && prevMonthQ.dataInfo.totalEleCost);
+      }
+      break;
+    }
   }
-  let bal = null;
-  try {
-    const d = await app.authed(P_BAL, { serviceCode: '0101143', source: 'app', target: a.pro, data: { srvCode: '', serialNo: '', channelCode: '0902', funcCode: 'A1007200', acctId: app.sess.userId, userName: 'acctid01', promotType: '1', promotCode: '1', userAccountId: app.sess.userId, list: [{ consNoSrc: a.src, proCode: a.pro, sceneType: a.elec, consNo: a.consNo, orgNo: a.org }] } });
-    bal = (Array.isArray(d.list) ? d.list : []).find((x) => x && typeof x === 'object') || null;
-  } catch (e) { if (['-200', '-201', '4006', 'RK008'].includes(e.code)) throw e; }
+
   // 转成和原兼容层一致的结构，界面层不用改
-  let sumMoney = NaN, owe = 0;
+  let sumMoney = num(prevBill.sumMoney), owe = num(prevBill.historyOwe) || 0;
   if (bal) {
     const sm = num(bal.sumMoney), ab = num(bal.accountBalance), pb = num(bal.prepayBal);
     console.log(`[SGCC] 户号${a.consNo} 余额接口原始字段: consType=${bal.consType}, sumMoney=${bal.sumMoney}, prepayBal=${bal.prepayBal}, accountBalance=${bal.accountBalance}, historyOwe=${bal.historyOwe}, date=${bal.date || bal.amtTime || ''}`);
@@ -478,22 +526,24 @@ async function queryAccount(app, a) {
   console.log(`[SGCC] 户号${a.consNo} 解析结果: 余额=${sumMoney}, 最新日用电=${latestDay ? `${latestDay.day}:${latestDay.dayElePq}度` : '无'}, 本月累计=${monthTotal}`);
   return {
     userInfo: { consNo: a.consNo, consNo_dst: a.src, consName_dst: a.name, orgName: a.orgName, proNo: a.pro },
-    eleBill: { sumMoney, historyOwe: owe, prepayBal: bal ? num(bal.prepayBal) : NaN, date: bal ? clean(bal.date || bal.amtTime) : '' },
+    eleBill: { sumMoney, historyOwe: owe, prepayBal: bal ? num(bal.prepayBal) : num(prevBill.prepayBal), date: bal ? clean(bal.date || bal.amtTime) : clean(prevBill.date) },
     dayElecQuantity31: { sevenEleList: daily },
     monthElecQuantity: { mothEleList: bills, dataInfo: { totalEleNum: yearPq, totalEleCost: yearAmt } },
     monthTotal,
   };
 }
 
-async function runSgcc(ctx, username, password) {
+async function runSgcc(ctx, username, password, prevList) {
   const app = new SgApp(ctx, username, password);
   const s = await app.ensure();
   const accts = s.accounts || [];
   if (!accts.length) return [];
+  const prevArr = Array.isArray(prevList) ? prevList : [];
   // 账号下所有户号都查一遍（最多 6 个），显示哪个由 SGCC_ACCOUNT 在渲染时决定，改户号不用重新登录
   const out = [];
   for (const a of accts.slice(0, 6)) {
-    try { out.push(await queryAccount(app, a)); } catch (e) { if (!out.length && a === accts[accts.length - 1]) throw e; }
+    const prevAcc = prevArr.find((x) => x && x.userInfo && (x.userInfo.consNo === a.consNo || x.userInfo.consNo_dst === a.src)) || null;
+    try { out.push(await queryAccount(app, a, prevAcc)); } catch (e) { if (!out.length && a === accts[accts.length - 1]) throw e; }
   }
   if (!out.length) throw new Error('户号数据查询失败');
   return out;
@@ -670,7 +720,7 @@ async function getData(ctx, force) {
   try { ctx.storage.set(KL, String(Date.now())); } catch (_) {}
   try {
     console.log(`[SGCC] 开始向网上国网拉取最新数据(force=${Boolean(force)})...`);
-    const list = await runSgcc(ctx, username, password);
+    const list = await runSgcc(ctx, username, password, mine ? mine.list : []);
     const next = { v: 3, ts: Date.now(), user: username, list };
     try { ctx.storage.setJSON(KD, next); ctx.storage.setJSON(KE, {}); } catch (_) {}
     console.log(`[SGCC] 国网数据拉取成功，已更新缓存(${updText(next.ts)})，共 ${list.length} 个户号`);
