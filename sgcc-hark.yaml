@@ -34,8 +34,18 @@ env_schema:
     default_value: '08:00'
   SGCC_LOW_BALANCE:
     name: 低余额提醒阈值（元）
-    description: 当电费余额低于该金额时在通知标题中醒目预警，默认 20 元
+    description: 当电费余额低于该金额（或欠费）时触发低余额提醒，默认 20 元；填 0 关闭低余额提醒
     default_value: '20'
+  SGCC_LOW_NOTIFY_MAX:
+    name: 低余额每日提醒次数上限
+    description: 电费低于阈值时，每天最多提醒几次（默认每天最多 1 次，选 0 则关闭低余额提醒）
+    default_value: '1'
+    options:
+      - '0'
+      - '1'
+      - '2'
+      - '3'
+      - '5'
   SGCC_PRICE:
     name: 电价单价（元/度，可选）
     description: 用于估算昨日及本月电费；留空则自动按近期月账单平均电价或阶梯电价计算
@@ -60,19 +70,19 @@ env_schema:
 scriptings:
 - generic:
     name: sgcc-hark
-    script_url: https://raw.githubusercontent.com/ddsy2001/Hark/main/sgcc-hark.js?v=20261014-0010
+    script_url: https://raw.githubusercontent.com/ddsy2001/Hark/main/sgcc-hark.js?v=20261014-0030
     timeout: 60
 - schedule:
     name: 网上国网定时更新
     cron: '17 */6 * * *'
-    script_url: https://raw.githubusercontent.com/ddsy2001/Hark/main/sgcc-hark.js?v=20261014-0010
+    script_url: https://raw.githubusercontent.com/ddsy2001/Hark/main/sgcc-hark.js?v=20261014-0030
     timeout: 60
     env:
       SGCC_SCHEDULE: 'true'
 - schedule:
     name: 网上国网每日电费通知
     cron: '{{{NOTIFY_CRON}}}'
-    script_url: https://raw.githubusercontent.com/ddsy2001/Hark/main/sgcc-hark.js?v=20261014-0010
+    script_url: https://raw.githubusercontent.com/ddsy2001/Hark/main/sgcc-hark.js?v=20261014-0030
     timeout: 60
     env:
       SGCC_NOTIFY_TASK: 'true'

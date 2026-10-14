@@ -989,17 +989,43 @@ function parseNotifyTimes(raw) {
   return out.length ? out : [{ h: 8, m: 0, key: '08:00' }];
 }
 
-function sendDailyNotify(ctx, r, env) {
-  if (!r.cache || !r.cache.list || !r.cache.list.length) return false;
+function readLog(ctx, key) {
+  try {
+    const j = ctx.storage.getJSON(key);
+    if (j && typeof j === 'object') return j;
+  } catch (_) {}
+  try {
+    const raw = ctx.storage.get(key);
+    if (raw) {
+      const p = JSON.parse(raw);
+      if (p && typeof p === 'object') return p;
+    }
+  } catch (_) {}
+  return {};
+}
+
+function writeLog(ctx, key, obj) {
+  try { ctx.storage.setJSON(key, obj); } catch (_) {}
+  try { ctx.storage.set(key, JSON.stringify(obj)); } catch (_) {}
+}
+
+function checkLowBalanceState(r, env) {
+  if (!r.cache || !r.cache.list || !r.cache.list.length) return { isLow: false, p: null };
   const picked = pickAccount(r.cache.list, env.SGCC_ACCOUNT);
   const acc = picked.acc;
-  if (!acc) return false;
+  if (!acc) return { isLow: false, p: null };
   const p = parse(acc);
-
   const lowLimit = num(env.SGCC_LOW_BALANCE);
   const warnLimit = Number.isFinite(lowLimit) ? lowLimit : 20;
-  const isLow = p.owe || (Number.isFinite(p.balance) && p.balance < warnLimit);
+  const isLow = warnLimit > 0 && (p.owe || (Number.isFinite(p.balance) && p.balance < warnLimit));
+  return { isLow, p };
+}
 
+function sendDailyNotify(ctx, r, env, { allowLowWarn = true } = {}) {
+  const { isLow, p } = checkLowBalanceState(r, env);
+  if (!p) return { sent: false, usedLowWarn: false };
+
+  const showLowWarn = isLow && allowLowWarn;
   const tail = p.consNo ? `尾号${p.consNo.replace(/\D/g, '').slice(-4) || p.consNo.slice(-4)}` : '';
   const acctLabel = p.name || tail || '默认户号';
 
@@ -1016,11 +1042,9 @@ function sendDailyNotify(ctx, r, env) {
   const mStr = Number.isFinite(p.monthUse) ? `本月累计 ${fmt(p.monthUse)} 度${mCostStr}` : '';
   const tStr = tierText(p, false);
 
-  const title = p.owe
-    ? '⚠️ 网上国网 · 电费欠费提醒'
-    : isLow
-      ? '⚠️ 网上国网 · 电费余额不足提醒'
-      : '⚡ 网上国网 · 每日电费播报';
+  const title = showLowWarn
+    ? (p.owe ? '⚠️ 网上国网 · 电费欠费提醒' : '⚠️ 网上国网 · 电费余额不足提醒')
+    : '⚡ 网上国网 · 每日电费播报';
   const subtitle = `${acctLabel}｜剩余电费 ${balStr}${daysStr}`;
   const body = [yStr, [mStr, tStr].filter(Boolean).join(' · ')].filter(Boolean).join('\n');
 
@@ -1031,9 +1055,9 @@ function sendDailyNotify(ctx, r, env) {
       body,
       sound: true,
     });
-    return true;
+    return { sent: true, usedLowWarn: showLowWarn };
   } catch (_) {
-    return false;
+    return { sent: false, usedLowWarn: false };
   }
 }
 
@@ -1049,18 +1073,19 @@ export default async function (ctx) {
     const username = clean(env.SGCC_USERNAME);
     if (!username || !clean(env.SGCC_PASSWORD)) return;
     const notifyStoreKey = uk('sgcc_hark_notify_log', username);
-    let notifiedMap = {};
-    try { notifiedMap = ctx.storage.getJSON(notifyStoreKey) || {}; } catch (_) { notifiedMap = {}; }
+    const notifiedMap = readLog(ctx, notifyStoreKey);
 
     let slotKey = '';
     const cronStr = clean(ctx.cron);
     const rawTime = clean(env.SGCC_NOTIFY_TIME);
-    if (!cronStr || rawTime.toLowerCase() === 'now' || rawTime === '立即') {
-      // 手动点击运行脚本或填“立即/now”时直接触发推送测试
-      slotKey = `manual_${Date.now()}`;
-    } else if (cronStr !== '* * * * *') {
-      // 用户在 compat_arguments 自定义了特定 cron 表达式，触发即推送
-      slotKey = `${todayKey}_cron_${String(now.h).padStart(2, '0')}:${String(now.min).padStart(2, '0')}`;
+    if (rawTime.toLowerCase() === 'now' || rawTime === '立即') {
+      // 填“立即/now”时当天仅触发 1 次测试，避免每分钟重复弹窗
+      const k = `${todayKey}_manual_test`;
+      if (!notifiedMap[k]) slotKey = k;
+    } else if (cronStr && cronStr !== '* * * * *') {
+      // 用户在 compat_arguments 自定义了特定 cron 表达式
+      const k = `${todayKey}_cron_${String(now.h).padStart(2, '0')}:${String(now.min).padStart(2, '0')}`;
+      if (!notifiedMap[k]) slotKey = k;
     } else {
       // 按模块环境变量 SGCC_NOTIFY_TIME（精确到 HH:MM）匹配，留 15 分钟休眠唤醒补偿窗口
       const times = parseNotifyTimes(rawTime);
@@ -1076,6 +1101,12 @@ export default async function (ctx) {
     }
     if (!slotKey || notifiedMap[slotKey]) return;
 
+    // 先写入当日已触发标记，防止并发或重复触发
+    const nextMap = {};
+    Object.keys(notifiedMap).forEach((k) => { if (k.startsWith(todayKey)) nextMap[k] = notifiedMap[k]; });
+    nextMap[slotKey] = Date.now();
+    writeLog(ctx, notifyStoreKey, nextMap);
+
     // 距离上次缓存超过 1 小时则强制刷新最新数据，否则优先用缓存保底
     let cached = null;
     try { cached = ctx.storage.getJSON(uk(K.data, username)); } catch (_) {}
@@ -1085,20 +1116,45 @@ export default async function (ctx) {
       try { ctx.notify({ title: '网上国网', body: r.error.slice(0, 120) }); } catch (_) {}
       return;
     }
-    if (sendDailyNotify(ctx, r, env)) {
-      const nextMap = {};
-      Object.keys(notifiedMap).forEach((k) => { if (k.startsWith(todayKey)) nextMap[k] = notifiedMap[k]; });
-      nextMap[slotKey] = Date.now();
-      try { ctx.storage.setJSON(notifyStoreKey, nextMap); } catch (_) {}
+    const maxLowRaw = num(env.SGCC_LOW_NOTIFY_MAX);
+    const maxLow = Number.isFinite(maxLowRaw) && maxLowRaw >= 0 ? Math.floor(maxLowRaw) : 1;
+    const lowCountKey = `${todayKey}_low_count`;
+    const curLowCount = Number(nextMap[lowCountKey] || 0);
+    const res = sendDailyNotify(ctx, r, env, { allowLowWarn: curLowCount < maxLow });
+    if (res.usedLowWarn) {
+      nextMap[lowCountKey] = curLowCount + 1;
+      writeLog(ctx, notifyStoreKey, nextMap);
     }
     return;
   }
 
-  // 2. 后台定时静默更新缓存任务
+  // 2. 后台定时静默更新缓存任务（同时根据低余额每日提醒上限检查是否需要低余额预警）
   if (clean(env.SGCC_SCHEDULE) === 'true') {
     const r = await getData(ctx, true);
     if (r.error && /验证|密码|账号/.test(r.error)) {
       try { ctx.notify({ title: '网上国网', body: r.error.slice(0, 120) }); } catch (_) {}
+      return;
+    }
+    const maxLowRaw = num(env.SGCC_LOW_NOTIFY_MAX);
+    const maxLow = Number.isFinite(maxLowRaw) && maxLowRaw >= 0 ? Math.floor(maxLowRaw) : 1;
+    if (maxLow > 0) {
+      const { isLow } = checkLowBalanceState(r, env);
+      if (isLow) {
+        const now = cnNow();
+        const todayKey = `${now.y}${String(now.m).padStart(2, '0')}${String(now.d).padStart(2, '0')}`;
+        const username = clean(env.SGCC_USERNAME);
+        const notifyStoreKey = uk('sgcc_hark_notify_log', username || 'default');
+        const notifiedMap = readLog(ctx, notifyStoreKey);
+        const lowCountKey = `${todayKey}_low_count`;
+        const curLowCount = Number(notifiedMap[lowCountKey] || 0);
+        if (curLowCount < maxLow) {
+          const nextMap = {};
+          Object.keys(notifiedMap).forEach((k) => { if (k.startsWith(todayKey)) nextMap[k] = notifiedMap[k]; });
+          nextMap[lowCountKey] = curLowCount + 1;
+          writeLog(ctx, notifyStoreKey, nextMap);
+          sendDailyNotify(ctx, r, env, { allowLowWarn: true });
+        }
+      }
     }
     return;
   }
