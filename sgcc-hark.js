@@ -437,7 +437,7 @@ async function queryAccount(app, a) {
     const [s, e] = monthRange(y, m);
     try {
       const d = await app.authed(P_DAILY, { serviceCode: 'BCP_000026', source: 'app', target: a.pro, data: { acctId: 'acctid01', channelCode: 'SGAPP', consNo: a.src, consNosrc: a.src, endTime: e, consType: consType(a), funcCode: 'ALIPAY_01', orgNo: a.org, proCode: a.pro, promotCode: '1', promotType: '1', serialNo: '', srvCode: '', startTime: s, userName: 'acctid01' } });
-      (Array.isArray(d.sevenEleList) ? d.sevenEleList : []).forEach((x) => daily.push({ day: x.day, dayElePq: x.dayElePq, dayEleCost: x.dayEleAmt != null ? x.dayEleAmt : x.dayEleCost != null ? x.dayEleCost : x.amt }));
+      (Array.isArray(d.sevenEleList) ? d.sevenEleList : []).forEach((x) => daily.push({ day: x.day, dayElePq: x.dayElePq, dayEleCost: x.dayEleAmt != null ? x.dayEleAmt : x.thisAmt != null ? x.thisAmt : x.dayEleCost != null ? x.dayEleCost : x.amt }));
       if (off === 0) monthTotal = num(d.totalPq);
     } catch (e) { if (off === 0 && !daily.length) throw e; }
   }
@@ -1100,11 +1100,8 @@ export default async function (ctx) {
     nextMap[slotKey] = Date.now();
     writeLog(ctx, notifyStoreKey, nextMap);
 
-    // 距离上次缓存超过 1 小时则强制刷新最新数据，否则优先用缓存保底
-    let cached = null;
-    try { cached = ctx.storage.getJSON(uk(K.data, username)); } catch (_) {}
-    const needForce = !cached || !cached.ts || (Date.now() - cached.ts > 3600000);
-    const r = await getData(ctx, needForce);
+    // 到点发送每日通知时，强制向国网拉取一次最新数据（同时把小组件缓存也刷新成最新出账余额）
+    const r = await getData(ctx, true);
     if (r.error && /验证|密码|账号/.test(r.error) && (!r.cache || !r.cache.list)) {
       try { ctx.notify({ title: '网上国网', body: r.error.slice(0, 120) }); } catch (_) {}
       return;
