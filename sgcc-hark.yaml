@@ -1,7 +1,9 @@
-name: 网上国网（Hark 液态玻璃版）
-description: 国家电网电费余额、昨日/本月/上月用电、近 30 日与月度柱状图；支持小/中/大号与锁屏。直连网上国网 App 接口，不经第三方网关；填写账号密码即可，每 6 小时自动更新
-author: Hark（版式参考 jadkg 南方电网小组件；App 协议移植自 stevenjoezhang/hass-state-grid，MIT）
+name: 网上国网（Hark 液态玻璃 · 每日电费推送版）
+description: 国家电网电费余额、昨日/本月/上月用电、近 30 日与月度柱状图；支持自定义精确到「时:分」的每日电费通知推送（含剩余电费、可用天数、昨日用电度数与电费）。直连网上国网 App 接口，不经第三方网关
+author: Hark & ddsy2001（版式参考 jadkg 南方电网小组件；App 协议移植自 stevenjoezhang/hass-state-grid，MIT）
 icon: https://is1-ssl.mzstatic.com/image/thumb/Purple116/v4/83/d8/8a/83d88a92-5a4d-7a2f-118c-80d795e7a9f6/AppIcon-0-0-1x_U007emarketing-0-5-0-0-sRGB-85-220.png/144x144.png
+compat_arguments:
+  NOTIFY_CRON: '* * * * *'
 env_schema:
   SGCC_USERNAME:
     name: 网上国网账号
@@ -18,6 +20,25 @@ env_schema:
   SGCC_ACCOUNT:
     name: 户号（可选）
     description: 多个户号时填要显示的户号或尾号，也可填 #2 表示第 2 个；留空显示第一个。想不同小组件显示不同户号，在各自小组件的环境变量里填
+    default_value: ''
+  SGCC_NOTIFY_ENABLED:
+    name: 每日电费通知
+    description: 开启后每天在设定的「每日通知时间」推送剩余电费、预计可用天数及昨日用电量与电费
+    default_value: 'true'
+    options:
+      - 'true'
+      - 'false'
+  SGCC_NOTIFY_TIME:
+    name: 每日通知时间（时:分）
+    description: 每天推送电费通知的时间，精确到分（24 小时制 HH:MM，如 08:00、08:30、20:15；支持填多个时间用逗号分隔）
+    default_value: '08:00'
+  SGCC_LOW_BALANCE:
+    name: 低余额提醒阈值（元）
+    description: 当电费余额低于该金额时在通知标题中醒目预警，默认 20 元
+    default_value: '20'
+  SGCC_PRICE:
+    name: 电价单价（元/度，可选）
+    description: 用于估算昨日及本月电费；留空则自动按近期月账单平均电价或阶梯电价计算
     default_value: ''
   SGCC_TIERS:
     name: 阶梯分界（可选）
@@ -39,15 +60,22 @@ env_schema:
 scriptings:
 - generic:
     name: sgcc-hark
-    script_url: https://raw.githubusercontent.com/zhaohantao1360-hash/Hark/main/sgcc-hark.js?v=20261013-2330
+    script_url: https://raw.githubusercontent.com/ddsy2001/Hark/main/sgcc-hark.js?v=20261014-0010
     timeout: 60
 - schedule:
     name: 网上国网定时更新
     cron: '17 */6 * * *'
-    script_url: https://raw.githubusercontent.com/zhaohantao1360-hash/Hark/main/sgcc-hark.js?v=20261013-2330
+    script_url: https://raw.githubusercontent.com/ddsy2001/Hark/main/sgcc-hark.js?v=20261014-0010
     timeout: 60
     env:
       SGCC_SCHEDULE: 'true'
+- schedule:
+    name: 网上国网每日电费通知
+    cron: '{{{NOTIFY_CRON}}}'
+    script_url: https://raw.githubusercontent.com/ddsy2001/Hark/main/sgcc-hark.js?v=20261014-0010
+    timeout: 60
+    env:
+      SGCC_NOTIFY_TASK: 'true'
 widgets:
 - name: sgcc-hark
   script_name: sgcc-hark

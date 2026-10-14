@@ -4,10 +4,11 @@
 
 | 组件 | 模块（YAML） | 说明 |
 | --- | --- | --- |
-| 中国移动 · 仪表盘版（推荐） | [`china-mobile-hark-dash.yaml`](https://raw.githubusercontent.com/zhaohantao1360-hash/Hark/main/china-mobile-hark-dash.yaml) | 话费、流量、语音仪表 + 7 天用量 + 月底预测 |
-| 订阅流量 · v2（推荐） | [`sub-traffic-hark-v2.yaml`](https://raw.githubusercontent.com/zhaohantao1360-hash/Hark/main/sub-traffic-hark-v2.yaml) | 最多 4 个机场订阅的剩余流量、预测、到期 |
-| 油价 | [`GasPrice-hark.yaml`](https://raw.githubusercontent.com/zhaohantao1360-hash/Hark/main/GasPrice-hark.yaml) | 92/95/98/柴油、调价倒计时、下轮预测、加满花费 |
-| 彩票开奖 | [`Lottery-hark.yaml`](https://raw.githubusercontent.com/zhaohantao1360-hash/Hark/main/Lottery-hark.yaml) | 7 种彩票开奖、冷热走势、参考号（仅供娱乐） |
+| 网上国网 · 每日电费推送版（新增） | [`sgcc-hark.yaml`](https://raw.githubusercontent.com/ddsy2001/Hark/main/sgcc-hark.yaml) | 电费余额、昨日/本月用电 + 自定义精确到「时:分」的每日电费通知推送 |
+| 中国移动 · 仪表盘版（推荐） | [`china-mobile-hark-dash.yaml`](https://raw.githubusercontent.com/ddsy2001/Hark/main/china-mobile-hark-dash.yaml) | 话费、流量、语音仪表 + 7 天用量 + 月底预测 |
+| 订阅流量 · v2（推荐） | [`sub-traffic-hark-v2.yaml`](https://raw.githubusercontent.com/ddsy2001/Hark/main/sub-traffic-hark-v2.yaml) | 最多 4 个机场订阅的剩余流量、预测、到期 |
+| 油价 | [`GasPrice-hark.yaml`](https://raw.githubusercontent.com/ddsy2001/Hark/main/GasPrice-hark.yaml) | 92/95/98/柴油、调价倒计时、下轮预测、加满花费 |
+| 彩票开奖 | [`Lottery-hark.yaml`](https://raw.githubusercontent.com/ddsy2001/Hark/main/Lottery-hark.yaml) | 7 种彩票开奖、冷热走势、参考号（仅供娱乐） |
 
 > 同类组件只启用一个（例如中国移动的 dash / classic / ios / 原版只选一个），避免重复请求和重复抓包。
 

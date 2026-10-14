@@ -270,7 +270,7 @@ const CHECK_KEY = 'LNPO+ISJ+QeqNemFK+3OMUdexSn2i6pB';
 
 class SgError extends Error { constructor(code, msg) { super(msg ? `${msg}` : code); this.code = String(code || ''); } }
 
-function cnNow() { const d = new Date(Date.now() + 8 * 3600000); const p = (n, l = 2) => String(n).padStart(l, '0'); return { s14: `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}`, ms: p(d.getUTCMilliseconds(), 3), y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate() }; }
+function cnNow() { const d = new Date(Date.now() + 8 * 3600000); const p = (n, l = 2) => String(n).padStart(l, '0'); return { s14: `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}`, ms: p(d.getUTCMilliseconds(), 3), y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate(), h: d.getUTCHours(), min: d.getUTCMinutes() }; }
 function reqTimestamp() { const n = cnNow(); return n.s14 + n.ms + randStr(6, '0123456789'); }
 function appGuidNew() { const n = cnNow(); return randStr(40, 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') + n.s14 + n.ms + String(100 + (randomBytes(2)[0] * 256 + randomBytes(1)[0]) % 900); }
 
@@ -437,7 +437,7 @@ async function queryAccount(app, a) {
     const [s, e] = monthRange(y, m);
     try {
       const d = await app.authed(P_DAILY, { serviceCode: 'BCP_000026', source: 'app', target: a.pro, data: { acctId: 'acctid01', channelCode: 'SGAPP', consNo: a.src, consNosrc: a.src, endTime: e, consType: consType(a), funcCode: 'ALIPAY_01', orgNo: a.org, proCode: a.pro, promotCode: '1', promotType: '1', serialNo: '', srvCode: '', startTime: s, userName: 'acctid01' } });
-      (Array.isArray(d.sevenEleList) ? d.sevenEleList : []).forEach((x) => daily.push({ day: x.day, dayElePq: x.dayElePq }));
+      (Array.isArray(d.sevenEleList) ? d.sevenEleList : []).forEach((x) => daily.push({ day: x.day, dayElePq: x.dayElePq, dayEleCost: x.dayEleAmt != null ? x.dayEleAmt : x.dayEleCost != null ? x.dayEleCost : x.amt }));
       if (off === 0) monthTotal = num(d.totalPq);
     } catch (e) { if (off === 0 && !daily.length) throw e; }
   }
@@ -534,7 +534,7 @@ function parse(acc) {
   const dq = acc.dayElecQuantity31 || acc.dayElecQuantity || {};
   const mq = acc.monthElecQuantity || {};
   const days = (Array.isArray(dq.sevenEleList) ? dq.sevenEleList : [])
-    .map((x) => ({ key: dayKey(x.day), v: num(x.dayElePq) }))
+    .map((x) => ({ key: dayKey(x.day), v: num(x.dayElePq), cost: num(x.dayEleCost) }))
     .filter((x) => x.key && Number.isFinite(x.v) && x.v >= 0)
     .sort((a, b) => (a.key < b.key ? -1 : 1));
   const uniq = [];
@@ -553,7 +553,8 @@ function parse(acc) {
   const info = mq.dataInfo || {};
   // 阶梯电价（年度累计）：已出账月份 + 还没出账的日用电
   const pro = clean(u.proNo);
-  const tierEnv = clean((globalThis.__sgEnv || {}).SGCC_TIERS);
+  const envObj = globalThis.__sgEnv || {};
+  const tierEnv = clean(envObj.SGCC_TIERS);
   const tiers = (tierEnv || (!pro || pro === '11102' ? '2880,4800' : '')).split(/[,，\s]+/).map(Number).filter((x) => x > 0);
   const yearKey = String(now.getFullYear());
   const settled = months.filter((x) => x.key.startsWith(yearKey));
@@ -566,15 +567,22 @@ function parse(acc) {
     const lv = yearTotal <= tiers[0] ? 1 : yearTotal <= tiers[1] ? 2 : 3;
     tier = { lv, total: yearTotal, left: lv < 3 ? tiers[lv - 1] - yearTotal : 0, price: !tierEnv ? [0.4883, 0.5383, 0.7883][lv - 1] : NaN };
   }
+  const customPrice = num(envObj.SGCC_PRICE);
+  const priced = months.filter((x) => x.v > 0 && x.cost > 0).pop();
+  const unitPrice = Number.isFinite(customPrice) && customPrice > 0
+    ? customPrice
+    : (priced ? priced.cost / priced.v : (tier && Number.isFinite(tier.price) ? tier.price : 0.4883));
   // 预计可用天数：余额 ÷（近 7 天日均电量 × 单价）
   let estDays = num(bill.dayNum);
   if (!Number.isFinite(estDays) && !owe && Number.isFinite(sum) && sum > 0) {
     const recent = uniq.slice(-7);
     const avg = recent.length ? recent.reduce((a, b) => a + b.v, 0) / recent.length : NaN;
-    const priced = months.filter((x) => x.v > 0 && x.cost > 0).pop();
-    const price = tier && Number.isFinite(tier.price) ? tier.price : priced ? priced.cost / priced.v : 0.4883;
-    if (avg > 0) estDays = Math.floor(sum / (avg * price));
+    if (avg > 0) estDays = Math.floor(sum / (avg * unitPrice));
   }
+  const monthUseVal = Number.isFinite(num(acc.monthTotal)) ? num(acc.monthTotal) : monthDays.length ? monthDays.reduce((a, b) => a + b.v, 0) : NaN;
+  const yesterdayCostVal = last && Number.isFinite(last.cost) && last.cost > 0
+    ? last.cost
+    : (last && Number.isFinite(last.v) ? last.v * unitPrice : NaN);
   return {
     name: (() => { const n = clean(u.consName_dst || u.consName); return /[:：]/.test(n) || n.length > 12 ? '' : n; })(),
     consNo: clean(u.consNo_dst || u.consNo),
@@ -585,8 +593,11 @@ function parse(acc) {
     days: estDays,
     billDate: clean(bill.date),
     yesterday: last ? last.v : NaN,
+    yesterdayCost: yesterdayCostVal,
     yesterdayKey: last ? last.key : '',
-    monthUse: Number.isFinite(num(acc.monthTotal)) ? num(acc.monthTotal) : monthDays.length ? monthDays.reduce((a, b) => a + b.v, 0) : NaN,
+    monthUse: monthUseVal,
+    monthCost: Number.isFinite(monthUseVal) ? monthUseVal * unitPrice : NaN,
+    unitPrice,
     lastMonth,
     yearUse: num(info.totalEleNum),
     yearCost: num(info.totalEleCost),
@@ -957,8 +968,133 @@ function buildLock(p, r, family) {
   };
 }
 
+// 解析每日通知时间（支持 "08:00"、"8:30"、"08：15"、"8点30分"、"0830"、"8" 以及逗号分隔多个时间如 "08:00,20:30"）
+function parseNotifyTimes(raw) {
+  const s = clean(raw) || '08:00';
+  const parts = s.split(/[,，;；\s]+/).filter(Boolean);
+  const out = [];
+  for (const part of parts) {
+    let h = NaN, m = 0;
+    const m1 = part.match(/^(\d{1,2})\s*[:：.点时]\s*(\d{1,2})?\s*分?$/);
+    const m2 = part.match(/^(\d{2})(\d{2})$/);
+    const m3 = part.match(/^(\d{1,2})$/);
+    if (m1) { h = Number(m1[1]); m = m1[2] != null && m1[2] !== '' ? Number(m1[2]) : 0; }
+    else if (m2) { h = Number(m2[1]); m = Number(m2[2]); }
+    else if (m3) { h = Number(m3[1]); m = 0; }
+    if (Number.isInteger(h) && h >= 0 && h <= 23 && Number.isInteger(m) && m >= 0 && m <= 59) {
+      const key = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+      if (!out.some((x) => x.key === key)) out.push({ h, m, key });
+    }
+  }
+  return out.length ? out : [{ h: 8, m: 0, key: '08:00' }];
+}
+
+function sendDailyNotify(ctx, r, env) {
+  if (!r.cache || !r.cache.list || !r.cache.list.length) return false;
+  const picked = pickAccount(r.cache.list, env.SGCC_ACCOUNT);
+  const acc = picked.acc;
+  if (!acc) return false;
+  const p = parse(acc);
+
+  const lowLimit = num(env.SGCC_LOW_BALANCE);
+  const warnLimit = Number.isFinite(lowLimit) ? lowLimit : 20;
+  const isLow = p.owe || (Number.isFinite(p.balance) && p.balance < warnLimit);
+
+  const tail = p.consNo ? `尾号${p.consNo.replace(/\D/g, '').slice(-4) || p.consNo.slice(-4)}` : '';
+  const acctLabel = p.name || tail || '默认户号';
+
+  const balStr = p.owe ? `欠费 ¥${money(p.balance)}` : `¥${money(p.balance)}`;
+  const daysStr = Number.isFinite(p.days) ? `（预计可用 ${fmt(p.days, 0)} 天）` : '';
+
+  const yDate = mmdd(p.yesterdayKey);
+  const yCostStr = Number.isFinite(p.yesterdayCost) ? `，电费约 ¥${money(p.yesterdayCost)}` : '';
+  const yStr = Number.isFinite(p.yesterday)
+    ? `昨日${yDate ? `（${yDate}）` : ''}用电 ${fmt(p.yesterday)} 度${yCostStr}`
+    : '昨日用电暂无数据';
+
+  const mCostStr = Number.isFinite(p.monthCost) ? `（约 ¥${money(p.monthCost)}）` : '';
+  const mStr = Number.isFinite(p.monthUse) ? `本月累计 ${fmt(p.monthUse)} 度${mCostStr}` : '';
+  const tStr = tierText(p, false);
+
+  const title = p.owe
+    ? '⚠️ 网上国网 · 电费欠费提醒'
+    : isLow
+      ? '⚠️ 网上国网 · 电费余额不足提醒'
+      : '⚡ 网上国网 · 每日电费播报';
+  const subtitle = `${acctLabel}｜剩余电费 ${balStr}${daysStr}`;
+  const body = [yStr, [mStr, tStr].filter(Boolean).join(' · ')].filter(Boolean).join('\n');
+
+  try {
+    ctx.notify({
+      title,
+      subtitle,
+      body,
+      sound: true,
+    });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 export default async function (ctx) {
   const env = ctx.env || {};
+  globalThis.__sgEnv = env;
+
+  // 1. 每日定时电费通知任务（支持精确到时:分，如 08:00、08:30）
+  if (clean(env.SGCC_NOTIFY_TASK) === 'true') {
+    if (clean(env.SGCC_NOTIFY_ENABLED || 'true') === 'false') return;
+    const now = cnNow();
+    const todayKey = `${now.y}${String(now.m).padStart(2, '0')}${String(now.d).padStart(2, '0')}`;
+    const username = clean(env.SGCC_USERNAME);
+    if (!username || !clean(env.SGCC_PASSWORD)) return;
+    const notifyStoreKey = uk('sgcc_hark_notify_log', username);
+    let notifiedMap = {};
+    try { notifiedMap = ctx.storage.getJSON(notifyStoreKey) || {}; } catch (_) { notifiedMap = {}; }
+
+    let slotKey = '';
+    const cronStr = clean(ctx.cron);
+    const rawTime = clean(env.SGCC_NOTIFY_TIME);
+    if (!cronStr || rawTime.toLowerCase() === 'now' || rawTime === '立即') {
+      // 手动点击运行脚本或填“立即/now”时直接触发推送测试
+      slotKey = `manual_${Date.now()}`;
+    } else if (cronStr !== '* * * * *') {
+      // 用户在 compat_arguments 自定义了特定 cron 表达式，触发即推送
+      slotKey = `${todayKey}_cron_${String(now.h).padStart(2, '0')}:${String(now.min).padStart(2, '0')}`;
+    } else {
+      // 按模块环境变量 SGCC_NOTIFY_TIME（精确到 HH:MM）匹配，留 15 分钟休眠唤醒补偿窗口
+      const times = parseNotifyTimes(rawTime);
+      const nowMins = now.h * 60 + now.min;
+      for (const t of times) {
+        const targetMins = t.h * 60 + t.m;
+        const k = `${todayKey}_${t.key}`;
+        if (nowMins >= targetMins && nowMins <= targetMins + 15 && !notifiedMap[k]) {
+          slotKey = k;
+          break;
+        }
+      }
+    }
+    if (!slotKey || notifiedMap[slotKey]) return;
+
+    // 距离上次缓存超过 1 小时则强制刷新最新数据，否则优先用缓存保底
+    let cached = null;
+    try { cached = ctx.storage.getJSON(uk(K.data, username)); } catch (_) {}
+    const needForce = !cached || !cached.ts || (Date.now() - cached.ts > 3600000);
+    const r = await getData(ctx, needForce);
+    if (r.error && /验证|密码|账号/.test(r.error) && (!r.cache || !r.cache.list)) {
+      try { ctx.notify({ title: '网上国网', body: r.error.slice(0, 120) }); } catch (_) {}
+      return;
+    }
+    if (sendDailyNotify(ctx, r, env)) {
+      const nextMap = {};
+      Object.keys(notifiedMap).forEach((k) => { if (k.startsWith(todayKey)) nextMap[k] = notifiedMap[k]; });
+      nextMap[slotKey] = Date.now();
+      try { ctx.storage.setJSON(notifyStoreKey, nextMap); } catch (_) {}
+    }
+    return;
+  }
+
+  // 2. 后台定时静默更新缓存任务
   if (clean(env.SGCC_SCHEDULE) === 'true') {
     const r = await getData(ctx, true);
     if (r.error && /验证|密码|账号/.test(r.error)) {
@@ -966,7 +1102,8 @@ export default async function (ctx) {
     }
     return;
   }
-  globalThis.__sgEnv = env;
+
+  // 3. 桌面与锁屏小组件渲染
   const family = ctx.widgetFamily || 'systemMedium';
   const r = await getData(ctx, false);
   if (!r.configured) return message('还没填写账号', '到 Egern「工具 → 模块 → 网上国网」里填写网上国网的手机号和密码，保存后刷新小组件。');
