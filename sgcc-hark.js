@@ -468,11 +468,14 @@ async function queryAccount(app, a) {
   let sumMoney = NaN, owe = 0;
   if (bal) {
     const sm = num(bal.sumMoney), ab = num(bal.accountBalance), pb = num(bal.prepayBal);
+    console.log(`[SGCC] 户号${a.consNo} 余额接口原始字段: consType=${bal.consType}, sumMoney=${bal.sumMoney}, prepayBal=${bal.prepayBal}, accountBalance=${bal.accountBalance}, historyOwe=${bal.historyOwe}, date=${bal.date || bal.amtTime || ''}`);
     if (String(bal.consType) === '1') sumMoney = Number.isFinite(sm) ? sm : pb;
     else if (sm > 0) { sumMoney = -sm; owe = sm; }
     else sumMoney = ab > 0 ? ab : pb > 0 ? pb : (Number.isFinite(sm) ? 0 : NaN);
     if (num(bal.historyOwe) > 0) owe = num(bal.historyOwe);
   }
+  const latestDay = daily.length ? daily[daily.length - 1] : null;
+  console.log(`[SGCC] 户号${a.consNo} 解析结果: 余额=${sumMoney}, 最新日用电=${latestDay ? `${latestDay.day}:${latestDay.dayElePq}度` : '无'}, 本月累计=${monthTotal}`);
   return {
     userInfo: { consNo: a.consNo, consNo_dst: a.src, consName_dst: a.name, orgName: a.orgName, proNo: a.pro },
     eleBill: { sumMoney, historyOwe: owe, prepayBal: bal ? num(bal.prepayBal) : NaN, date: bal ? clean(bal.date || bal.amtTime) : '' },
@@ -617,33 +620,64 @@ function friendly(e) {
 }
 
 async function getData(ctx, force) {
-  const env = ctx.env || {};
+  const env = globalThis.__sgEnv || ctx.env || {};
   const username = clean(env.SGCC_USERNAME);
   const password = clean(env.SGCC_PASSWORD);
   let cache = null;
-  if (!username || !password) return { configured: false, cache: null };
+  if (!username || !password) {
+    console.log('[SGCC] 未检测到账号或密码配置');
+    return { configured: false, cache: null };
+  }
   const KD = uk(K.data, username), KE = uk(K.err, username), KL = uk(K.lock, username);
   try { cache = ctx.storage.getJSON(KD); } catch (_) {}
   if (!cache) { try { const o = ctx.storage.getJSON(K.data); if (o && o.user === username) cache = o; } catch (_) {} }
   const mine = cache && cache.user === username && cache.v === 3 ? cache : null;
-  const hours = Math.max(1, num(env.SGCC_REFRESH) || 6);
-  if (mine && mine.list && Date.now() - mine.ts < hours * 3600000 && !force) return { configured: true, cache: mine };
-  // 失败退避：同一账号密码失败后 30 分钟内不重复登录（避免触发锁号），填了新验证码时例外
   let err = null;
   try { err = ctx.storage.getJSON(KE); } catch (_) {}
   const sig = md5hex(username + '|' + password + '|' + clean(env.SGCC_SMS));
-  if (err && err.sig === sig && Date.now() - err.ts < 30 * 60000) return { configured: true, cache: mine, error: err.msg };
+
+  // 国网每天早间（约 06:00~08:30）跑批结算前一日电费：
+  // 若缓存是今天北京时间 08:30 之前拉取的（如早上 06:19），且当前已满 08:30，则自动视为结算前旧缓存，触发一次刷新
+  const nowCn = cnNow();
+  const today0830 = Date.UTC(nowCn.y, nowCn.m - 1, nowCn.d, 0, 30, 0);
+  const isPreSettlementCache = mine && mine.ts && Date.now() >= today0830 && mine.ts < today0830;
+
+  const hours = Math.max(1, num(env.SGCC_REFRESH) || 6);
+  if (mine && mine.list && Date.now() - mine.ts < hours * 3600000 && !force && !isPreSettlementCache) {
+    const recentErr = err && err.sig === sig && err.ts > mine.ts ? err.msg : '';
+    console.log(`[SGCC] 命中本地缓存(更新于 ${updText(mine.ts)}，刷新间隔 ${hours}h)${recentErr ? ' | 上次刷新异常: ' + recentErr : ''}`);
+    return { configured: true, cache: mine, error: recentErr };
+  }
+  if (isPreSettlementCache && !force) {
+    console.log(`[SGCC] 检测到缓存(${updText(mine.ts)})早于今日 08:30 国网日结时间，自动触发刷新`);
+  }
+
+  // 失败退避：密码错误/设备验证类错误退避 30 分钟（避免锁号）；网络波动等临时错误在非强制刷新时退避 2 分钟
+  if (err && err.sig === sig && err.msg) {
+    const isAuthLockErr = /密码错误|0100|4006|验证新设备/.test(err.msg);
+    const backoffMs = isAuthLockErr ? 30 * 60000 : (force ? 0 : 2 * 60000);
+    if (backoffMs > 0 && Date.now() - err.ts < backoffMs) {
+      console.log(`[SGCC] 失败退避中(剩余 ${Math.ceil((backoffMs - (Date.now() - err.ts)) / 1000)}s): ${err.msg}`);
+      return { configured: true, cache: mine, error: err.msg };
+    }
+  }
   let lock = 0;
   try { lock = Number(ctx.storage.get(KL) || 0); } catch (_) {}
-  if (lock && Date.now() - lock < 90000) return { configured: true, cache: mine, busy: true, error: mine ? '' : '正在登录网上国网…' };
+  if (lock && Date.now() - lock < 60000) {
+    console.log('[SGCC] 已有并发请求正在执行，跳过本次重复请求');
+    return { configured: true, cache: mine, busy: true, error: mine ? '' : '正在登录网上国网…' };
+  }
   try { ctx.storage.set(KL, String(Date.now())); } catch (_) {}
   try {
+    console.log(`[SGCC] 开始向网上国网拉取最新数据(force=${Boolean(force)})...`);
     const list = await runSgcc(ctx, username, password);
     const next = { v: 3, ts: Date.now(), user: username, list };
     try { ctx.storage.setJSON(KD, next); ctx.storage.setJSON(KE, {}); } catch (_) {}
+    console.log(`[SGCC] 国网数据拉取成功，已更新缓存(${updText(next.ts)})，共 ${list.length} 个户号`);
     return { configured: true, cache: next };
   } catch (e) {
     const msg = friendly(e);
+    console.log(`[SGCC] 国网数据拉取失败: ${msg}`);
     try { ctx.storage.setJSON(KE, { sig, ts: Date.now(), msg }); } catch (_) {}
     return { configured: true, cache: mine, error: msg };
   } finally {
@@ -1041,14 +1075,16 @@ function sendDailyNotify(ctx, r, env, { allowLowWarn = true } = {}) {
   const mCostStr = Number.isFinite(p.monthCost) ? `（约 ¥${money(p.monthCost)}）` : '';
   const mStr = Number.isFinite(p.monthUse) ? `本月累计 ${fmt(p.monthUse)} 度${mCostStr}` : '';
   const tStr = tierText(p, false);
+  const errNote = r.error ? `⚠️ 实时刷新失败(当前为 ${updText(r.cache && r.cache.ts)} 缓存): ${r.error}` : '';
 
   const title = showLowWarn
     ? (p.owe ? '⚠️ 网上国网 · 电费欠费提醒' : '⚠️ 网上国网 · 电费余额不足提醒')
     : '⚡ 网上国网 · 每日电费播报';
   const subtitle = `${acctLabel}｜剩余电费 ${balStr}${daysStr}`;
-  const body = [yStr, [mStr, tStr].filter(Boolean).join(' · ')].filter(Boolean).join('\n');
+  const body = [yStr, [mStr, tStr].filter(Boolean).join(' · '), errNote].filter(Boolean).join('\n');
 
   try {
+    console.log(`[SGCC] 发送通知 -> ${title} | ${subtitle} | ${body.replace(/\n/g, ' / ')}`);
     ctx.notify({
       title,
       subtitle,
@@ -1056,29 +1092,58 @@ function sendDailyNotify(ctx, r, env, { allowLowWarn = true } = {}) {
       sound: true,
     });
     return { sent: true, usedLowWarn: showLowWarn };
-  } catch (_) {
+  } catch (e) {
+    console.log(`[SGCC] 通知发送异常: ${(e && e.message) || e}`);
     return { sent: false, usedLowWarn: false };
   }
 }
 
+function resolveEnv(ctx) {
+  const raw = Object.assign({}, ctx.env || {});
+  const syncKey = 'sgcc_hark_env_sync';
+  const saved = readLog(ctx, syncKey);
+  const keys = ['SGCC_USERNAME', 'SGCC_PASSWORD', 'SGCC_SMS', 'SGCC_ACCOUNT', 'SGCC_NOTIFY_ENABLED', 'SGCC_NOTIFY_TIME', 'SGCC_LOW_BALANCE', 'SGCC_LOW_NOTIFY_MAX', 'SGCC_PRICE', 'SGCC_TIERS', 'SGCC_POLICY', 'SGCC_REFRESH'];
+  let changed = false;
+  for (const k of keys) {
+    if (clean(raw[k]) !== '') {
+      if (saved[k] !== raw[k]) { saved[k] = raw[k]; changed = true; }
+    } else if (clean(saved[k]) !== '') {
+      raw[k] = saved[k];
+    }
+  }
+  if (changed) writeLog(ctx, syncKey, saved);
+  return raw;
+}
+
 export default async function (ctx) {
-  const env = ctx.env || {};
+  const env = resolveEnv(ctx);
   globalThis.__sgEnv = env;
 
   // 1. 每日定时电费通知任务（支持精确到时:分，如 08:00、08:30）
   if (clean(env.SGCC_NOTIFY_TASK) === 'true') {
-    if (clean(env.SGCC_NOTIFY_ENABLED || 'true') === 'false') return;
     const now = cnNow();
+    const nowHHMM = `${String(now.h).padStart(2, '0')}:${String(now.min).padStart(2, '0')}`;
+    if (clean(env.SGCC_NOTIFY_ENABLED || 'true') === 'false') {
+      console.log(`[SGCC每日通知] 当前 ${nowHHMM} | 每日电费通知开关已关闭`);
+      return;
+    }
     const todayKey = `${now.y}${String(now.m).padStart(2, '0')}${String(now.d).padStart(2, '0')}`;
     const username = clean(env.SGCC_USERNAME);
-    if (!username || !clean(env.SGCC_PASSWORD)) return;
+    if (!username || !clean(env.SGCC_PASSWORD)) {
+      console.log(`[SGCC每日通知] 当前 ${nowHHMM} | 未填写网上国网账号或密码`);
+      return;
+    }
     const notifyStoreKey = uk('sgcc_hark_notify_log', username);
     const notifiedMap = readLog(ctx, notifyStoreKey);
 
     let slotKey = '';
     const rawTime = clean(env.SGCC_NOTIFY_TIME);
+    if (notifiedMap._lastRawTime !== rawTime) {
+      delete notifiedMap[`${todayKey}_manual_test`];
+      notifiedMap._lastRawTime = rawTime;
+      writeLog(ctx, notifyStoreKey, notifiedMap);
+    }
     if (rawTime.toLowerCase() === 'now' || rawTime === '立即') {
-      // 填“立即/now”时当天仅触发 1 次测试，避免每分钟重复弹窗
       const k = `${todayKey}_manual_test`;
       if (!notifiedMap[k]) slotKey = k;
     } else {
@@ -1092,10 +1157,14 @@ export default async function (ctx) {
         }
       }
     }
-    if (!slotKey || notifiedMap[slotKey]) return;
+    if (!slotKey || notifiedMap[slotKey]) {
+      console.log(`[SGCC每日通知] 当前 ${nowHHMM} | 设定时间="${rawTime || '08:00'}" | 未到设定时间或今日该时段已推送`);
+      return;
+    }
 
+    console.log(`[SGCC每日通知] 命中设定时间(${slotKey})，开始强制刷新最新电费并推送...`);
     // 先写入当日已触发标记，防止并发或重复触发
-    const nextMap = {};
+    const nextMap = { _lastRawTime: rawTime };
     Object.keys(notifiedMap).forEach((k) => { if (k.startsWith(todayKey)) nextMap[k] = notifiedMap[k]; });
     nextMap[slotKey] = Date.now();
     writeLog(ctx, notifyStoreKey, nextMap);
@@ -1120,6 +1189,7 @@ export default async function (ctx) {
 
   // 2. 后台定时静默更新缓存任务（同时根据低余额每日提醒上限检查是否需要低余额预警）
   if (clean(env.SGCC_SCHEDULE) === 'true') {
+    console.log('[SGCC定时更新] 开始执行后台定时刷新任务...');
     const r = await getData(ctx, true);
     if (r.error && /验证|密码|账号/.test(r.error)) {
       try { ctx.notify({ title: '网上国网', body: r.error.slice(0, 120) }); } catch (_) {}
@@ -1139,7 +1209,7 @@ export default async function (ctx) {
         const curLowCount = Number(notifiedMap[lowCountKey] || 0);
         if (curLowCount < maxLow) {
           const nextMap = {};
-          Object.keys(notifiedMap).forEach((k) => { if (k.startsWith(todayKey)) nextMap[k] = notifiedMap[k]; });
+          Object.keys(notifiedMap).forEach((k) => { if (k.startsWith(todayKey) || k === '_lastRawTime') nextMap[k] = notifiedMap[k]; });
           nextMap[lowCountKey] = curLowCount + 1;
           writeLog(ctx, notifyStoreKey, nextMap);
           sendDailyNotify(ctx, r, env, { allowLowWarn: true });
@@ -1162,6 +1232,7 @@ export default async function (ctx) {
   p.login = clean(env.SGCC_USERNAME).slice(-4);
   p.count = r.cache.list.length;
   p.index = r.cache.list.indexOf(acc) + 1;
+  console.log(`[SGCC小组件] 渲染(${family}) | 余额=¥${money(p.balance)}(prepay=${p.prepay}) | 昨日(${p.yesterdayKey})=${fmt(p.yesterday)}度 | 缓存时间=${updText(r.cache.ts)}`);
   if (family.startsWith('accessory')) return buildLock(p, r, family);
   if (family === 'systemSmall') return buildSmall(p, r);
   if (family === 'systemMedium') return buildMedium(p, r);
