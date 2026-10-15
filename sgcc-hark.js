@@ -9,7 +9,7 @@
 
 // 会话、验证码、缓存按登录手机号分开存，多个账号的小组件互不覆盖
 function uk(base, user) { return `${base}_${md5hex(String(user)).slice(0, 8)}`; }
-const K = { data: 'sgcc_hark_data2', err: 'sgcc_hark_err2', lock: 'sgcc_hark_lock', dev: 'sgcc_app_dev', sess: 'sgcc_app_sess', sms: 'sgcc_app_sms' };
+const K = { data: 'sgcc_hark_data2', err: 'sgcc_hark_err2', lock: 'sgcc_hark_lock', dev: 'sgcc_app_dev', sess: 'sgcc_app_sess', sms: 'sgcc_app_sms', loginBlock: 'sgcc_app_loginblock' };
 
 function clean(v) { return String(v == null ? '' : v).trim(); }
 function num(v) { if (typeof v === 'number') return Number.isFinite(v) ? v : NaN; const n = Number(String(v == null ? '' : v).replace(/[^\d.-]/g, '')); return Number.isFinite(n) && String(v == null ? '' : v).trim() !== '' ? n : NaN; }
@@ -371,6 +371,8 @@ class SgApp {
     const life = Number(biz.tokenExpireTime) || 1296000;
     this.sess = { user: this.user, token: String(biz.token), userId: String(ui.userId || biz.userId || '0'), province: clean(ui.addressProvince), exp: Date.now() + Math.max(300, life) * 1000, accounts: (Array.isArray(ui.powerUserList) ? ui.powerUserList : []).map(acctOf).filter(Boolean) };
     this.st(this.sk(K.sess), this.sess);
+    this.st(this.sk(K.loginBlock), {});
+    console.log('[SGCC] 重新登录成功');
     return this.sess;
   }
   async sendDeviceSms() {
@@ -380,7 +382,15 @@ class SgApp {
     if (!ck) throw new SgError('sms', '验证码发送失败');
     return String(ck);
   }
+  // 清除本地登录会话（含旧版全局会话），设备指纹保留
+  dropSession() {
+    this.st(this.sk(K.sess), {});
+    const o = this.st(K.sess); if (o && o.user === this.user) this.st(K.sess, {});
+    this.sess = null;
+  }
   async ensure() {
+    // 本次运行里登录已经失败过：直接复用这个错误，不再重复请求登录（之前每个接口都会各登录一次）
+    if (this.loginErr) throw this.loginErr;
     let s = this.st(this.sk(K.sess));
     if (!s || !s.token) { const o = this.st(K.sess); if (o && o.user === this.user) s = o; }
     if (s && s.user === this.user && s.token && s.exp > Date.now() + 300000) { this.sess = s; return s; }
@@ -392,9 +402,26 @@ class SgApp {
       this.st(this.sk(K.sms), { ...pend, used: sms });
       return this.login(sms, pend.codeKey);
     }
+    // 跨运行的登录退避：国网拒绝登录（如 S1009 限流）后，按 15/30/60/120/240 分钟递增等待，避免反复登录让限流更久
+    const blk = this.st(this.sk(K.loginBlock));
+    if (blk && blk.until > Date.now()) {
+      this.loginErr = new SgError('LOGIN_BACKOFF', `登录已失效，重新登录被国网拒绝（${blk.code || '繁忙'}），${updText(blk.until)} 后自动重试`);
+      console.log(`[SGCC] 登录退避中，${updText(blk.until)} 前不再尝试登录（已连续失败 ${blk.n} 次）`);
+      throw this.loginErr;
+    }
     try { return await this.login(); }
     catch (e) {
-      if (e.code !== '4006') throw e;
+      if (e.code !== '4006') {
+        const n = (blk && blk.n ? blk.n : 0) + 1;
+        const waitMin = Math.min(240, 15 * 2 ** (n - 1));
+        this.st(this.sk(K.loginBlock), { n, until: Date.now() + waitMin * 60000, code: String(e.code || ''), msg: String(e.message || '') });
+        console.log(`[SGCC] 重新登录失败([${e.code}] ${e.message})，${waitMin} 分钟内不再尝试登录`);
+        const busy = /S1009|101009/.test(String(e.code)) || /系统正忙/.test(String(e.message));
+        this.loginErr = busy
+          ? new SgError('LOGIN_BUSY', `登录已失效，重新登录时国网繁忙（S1009），${waitMin} 分钟后自动重试`)
+          : e;
+        throw this.loginErr;
+      }
       if (!pendOk || Date.now() - pend.ts > 5 * 60000) {
         const codeKey = await this.sendDeviceSms();
         this.st(this.sk(K.sms), { user: this.user, codeKey, ts: Date.now(), used: sms });
@@ -409,12 +436,12 @@ class SgApp {
       try { return SgApp.check(resp); }
       catch (e) {
         console.log(`[SGCC] 接口 ${path} 响应异常(第${i + 1}次): [${e.code}] ${e.message}`);
-        if (i === 0 && (e.code === 'S1009' || /系统正忙/.test(e.message))) {
+        if (i === 0 && (/S1009|101009/.test(e.code) || /系统正忙/.test(e.message))) {
           await new Promise((r) => setTimeout(r, 1000));
           continue;
         }
         if (!['-200', '-201'].includes(e.code) || i) throw e;
-        this.st(this.sk(K.sess), {}); this.sess = null; await this.ensure();
+        this.dropSession(); await this.ensure();
       }
     }
     return {};
@@ -549,11 +576,20 @@ async function runSgcc(ctx, username, password, prevList) {
   const prevArr = Array.isArray(prevList) ? prevList : [];
   // 账号下所有户号都查一遍（最多 6 个），显示哪个由 SGCC_ACCOUNT 在渲染时决定，改户号不用重新登录
   const out = [];
+  let fresh = 0, lastErr = null;
   for (const a of accts.slice(0, 6)) {
     const prevAcc = prevArr.find((x) => x && x.userInfo && (x.userInfo.consNo === a.consNo || x.userInfo.consNo_dst === a.src)) || null;
-    try { out.push(await queryAccount(app, a, prevAcc)); } catch (e) { if (!out.length && a === accts[accts.length - 1]) throw e; }
+    try { out.push(await queryAccount(app, a, prevAcc)); fresh++; }
+    catch (e) {
+      lastErr = e;
+      if (['4006', 'RK008'].includes(e.code)) throw e; // 需要用户操作，直接上报
+      console.log(`[SGCC] 户号${a.consNo} 本次查询失败([${e.code}] ${e.message})${prevAcc ? '，保留上次缓存' : ''}`);
+      // 之前这里会直接丢掉失败的户号（日志显示“共 1 个户号”），现在保留上次缓存并标记为旧数据
+      if (prevAcc) out.push({ ...prevAcc, balStale: true, dailyStale: true });
+    }
   }
-  if (!out.length) throw new Error('户号数据查询失败');
+  // 没有任何户号拿到新数据：本次刷新算失败（不更新缓存时间）
+  if (!fresh) throw lastErr || new Error('户号数据查询失败');
   return out;
 }
 
@@ -675,9 +711,10 @@ function parse(acc) {
 function friendly(e) {
   const code = (e && e.code) || '';
   const msg = clean((e && e.message) || e).replace(/^Error:\s*/, '');
+  if (code === 'LOGIN_BACKOFF' || code === 'LOGIN_BUSY') return msg;
   if (code === 'RK008') return '国网要求安全验证（RK008）：先在官方网上国网 App 登录一次，过几小时再刷新';
   if (code === '0100' || /密码错误/.test(msg)) return '账号或密码错误（连错 5 次会锁 30 分钟），请检查模块里的账号密码';
-  if (code === 'S1009' || /系统正忙/.test(msg)) return '国网服务器繁忙（S1009），稍后会自动重试';
+  if (/S1009|101009/.test(code) || /系统正忙/.test(msg)) return '国网服务器繁忙（S1009），稍后会自动重试';
   return msg || '查询失败';
 }
 
@@ -716,7 +753,7 @@ async function getData(ctx, force) {
 
   // 失败退避：密码错误/设备验证类错误退避 30 分钟（避免锁号）；网络波动等临时错误在非强制刷新时退避 2 分钟
   if (err && err.sig === sig && err.msg) {
-    const isAuthLockErr = /密码错误|0100|4006|验证新设备/.test(err.msg);
+    const isAuthLockErr = ['0100', '4006'].includes(String(err.code || '')) || /密码错误|验证新设备/.test(err.msg);
     const backoffMs = isAuthLockErr ? 30 * 60000 : (force ? 0 : 2 * 60000);
     if (backoffMs > 0 && Date.now() - err.ts < backoffMs) {
       console.log(`[SGCC] 失败退避中(剩余 ${Math.ceil((backoffMs - (Date.now() - err.ts)) / 1000)}s): ${err.msg}`);
