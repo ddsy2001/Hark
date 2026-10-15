@@ -441,14 +441,16 @@ async function queryAccount(app, a, prevAcc) {
     : [];
   const prevMonthQ = (prevAcc && prevAcc.monthElecQuantity) || null;
 
-  // 1. 优先查询电费余额接口 (c16/f01，与网上国网 App 首页同源，不受日用电账单服务 S1009 繁忙影响)
+  // 1. 优先查询电费余额接口 (c16/f01，与网上国网 App 首页同源)
   let bal = null;
+  let balStale = false;
   try {
     const d = await app.authed(P_BAL, { serviceCode: '0101143', source: 'app', target: a.pro, data: { srvCode: '', serialNo: '', channelCode: '0902', funcCode: 'A1007200', acctId: app.sess.userId, userName: 'acctid01', promotType: '1', promotCode: '1', userAccountId: app.sess.userId, list: [{ consNoSrc: a.src, proCode: a.pro, sceneType: a.elec, consNo: a.consNo, orgNo: a.org }] } });
     bal = (Array.isArray(d.list) ? d.list : []).find((x) => x && typeof x === 'object') || null;
   } catch (e) {
     if (['-200', '-201', '4006', 'RK008'].includes(e.code)) throw e;
-    console.log(`[SGCC] 户号${a.consNo} 余额接口暂不可用([${e.code}] ${e.message})，沿用缓存余额`);
+    balStale = true;
+    console.log(`[SGCC] 户号${a.consNo} 余额接口失败([${e.code}] ${e.message})，余额将标记为缓存数据`);
   }
 
   // 2. 查询日用电量明细接口 (c11/f01)；上月数据若已完整（含月末最后一天）在缓存中则直接复用，减少请求避免触发 S1009
@@ -475,14 +477,13 @@ async function queryAccount(app, a, prevAcc) {
     } catch (e) {
       if (['-200', '-201', '4006', 'RK008'].includes(e.code)) throw e;
       if (off === 0) {
-        if (prevDaily.length || bal) {
-          console.log(`[SGCC] 户号${a.consNo} 日用电接口繁忙([${e.code}] ${e.message})，保留历史日用电图表缓存`);
-          daily = prevDaily.slice();
-          monthTotal = num(prevAcc && prevAcc.monthTotal);
-          dailyStale = true;
-          break;
-        }
-        throw e;
+        // 余额和日用电都没拿到新数据：本次刷新算失败，不更新缓存时间，界面会如实显示“更新失败，显示缓存”
+        if (!bal) throw e;
+        console.log(`[SGCC] 户号${a.consNo} 日用电接口失败([${e.code}] ${e.message})，余额已更新，日用电沿用缓存`);
+        daily = prevDaily.slice();
+        monthTotal = num(prevAcc && prevAcc.monthTotal);
+        dailyStale = true;
+        break;
       }
       // 上月查询失败时退回缓存里的上月数据，避免图表缺一截
       if (cachedLastMonthDays.length) daily = daily.concat(cachedLastMonthDays);
@@ -531,11 +532,12 @@ async function queryAccount(app, a, prevAcc) {
   console.log(`[SGCC] 户号${a.consNo} 解析结果: 余额=${sumMoney}, 最新日用电=${latestDay ? `${latestDay.day}:${latestDay.dayElePq}度` : '无'}, 本月累计=${monthTotal}`);
   return {
     userInfo: { consNo: a.consNo, consNo_dst: a.src, consName_dst: a.name, orgName: a.orgName, proNo: a.pro },
-    eleBill: { sumMoney, historyOwe: owe, prepayBal: bal ? num(bal.prepayBal) : num(prevBill.prepayBal), date: bal ? clean(bal.date || bal.amtTime) : clean(prevBill.date) },
+    eleBill: { sumMoney, historyOwe: owe, prepayBal: bal ? num(bal.prepayBal) : num(prevBill.prepayBal), date: bal ? clean(bal.date || bal.amtTime) : clean(prevBill.date), balTs: bal ? Date.now() : num(prevBill.balTs) },
     dayElecQuantity31: { sevenEleList: daily },
     monthElecQuantity: { mothEleList: bills, dataInfo: { totalEleNum: yearPq, totalEleCost: yearAmt } },
     monthTotal,
     dailyStale,
+    balStale,
   };
 }
 
@@ -664,6 +666,8 @@ function parse(acc) {
     daily: uniq.slice(-30),
     months: months.filter((x) => x.key.startsWith(String(now.getFullYear()))),
     dailyStale: Boolean(acc.dailyStale),
+    balStale: Boolean(acc.balStale),
+    balTs: num(bill.balTs),
   };
 }
 
@@ -735,8 +739,23 @@ async function getData(ctx, force) {
     return { configured: true, cache: next };
   } catch (e) {
     const msg = friendly(e);
-    console.log(`[SGCC] 国网数据拉取失败: ${msg}`);
-    try { ctx.storage.setJSON(KE, { sig, ts: Date.now(), msg }); } catch (_) {}
+    const code = String((e && e.code) || '');
+    console.log(`[SGCC] 国网数据拉取失败: [${code}] ${msg}`);
+    const rec = { sig, ts: Date.now(), msg, code };
+    // S1009 持续超过 30 分钟：大概率是登录会话被国网限流，清除会话（保留设备指纹，避免触发陌生设备验证），
+    // 下次刷新时重新登录。做法参考 githubdulong/Script 的 SGCC.js「清除缓存」；每 6 小时最多重置一次
+    if (code === 'S1009' || /系统正忙/.test(msg)) {
+      const prevBusy = err && err.sig === sig && err.s1009Since;
+      rec.s1009Since = prevBusy ? err.s1009Since : Date.now();
+      rec.resetAt = (err && err.sig === sig && err.resetAt) || 0;
+      if (Date.now() - rec.s1009Since > 30 * 60000 && Date.now() - rec.resetAt > 6 * 3600000) {
+        try { ctx.storage.setJSON(uk(K.sess, username), {}); } catch (_) {}
+        try { const o = ctx.storage.getJSON(K.sess); if (o && o.user === username) ctx.storage.setJSON(K.sess, {}); } catch (_) {}
+        rec.resetAt = Date.now();
+        console.log('[SGCC] S1009 已持续超过 30 分钟，已清除登录会话（保留设备指纹），下次刷新将重新登录');
+      }
+    }
+    try { ctx.storage.setJSON(KE, rec); } catch (_) {}
     return { configured: true, cache: mine, error: msg };
   } finally {
     try { ctx.storage.set(KL, '0'); } catch (_) {}
@@ -942,7 +961,8 @@ function message(title, body, ts) {
 
 function errLine(r, p) {
   if (!r.error && !r.busy) {
-    if (p && p.dailyStale) return row([icon('clock.badge.exclamationmark', C.warn, 9), T('余额已更新，日用电国网繁忙暂未更新', 8, C.warn)], { gap: 3 });
+    if (p && p.balStale) return row([icon('clock.badge.exclamationmark', C.warn, 9), T(`余额未能刷新（国网繁忙），显示${Number.isFinite(p.balTs) ? ' ' + updText(p.balTs) + ' 的' : '旧'}缓存`, 8, C.warn)], { gap: 3 });
+    if (p && p.dailyStale) return row([icon('clock.badge.exclamationmark', C.warn, 9), T('余额已是最新，日用电国网繁忙暂未更新', 8, C.warn)], { gap: 3 });
     return null;
   }
   return row([icon('exclamationmark.circle.fill', C.warn, 9), T(r.busy ? '正在更新…' : `更新失败，显示缓存：${r.error}`, 8, C.warn)], { gap: 3 });
@@ -1138,7 +1158,9 @@ function sendDailyNotify(ctx, r, env, { allowLowWarn = true } = {}) {
   const tStr = tierText(p, false);
   const errNote = r.error
     ? `⚠️ 实时刷新失败(当前为 ${updText(r.cache && r.cache.ts)} 缓存): ${r.error}`
-    : (p.dailyStale ? '⚠️ 国网日用电接口繁忙，昨日用电为上次缓存数据' : '');
+    : p.balStale
+      ? `⚠️ 余额未能刷新（国网繁忙），为${Number.isFinite(p.balTs) ? ' ' + updText(p.balTs) + ' 的' : '旧'}缓存数据`
+      : (p.dailyStale ? '⚠️ 国网日用电接口繁忙，昨日用电为上次缓存数据' : '');
 
   const title = showLowWarn
     ? (p.owe ? '⚠️ 网上国网 · 电费欠费提醒' : '⚠️ 网上国网 · 电费余额不足提醒')
