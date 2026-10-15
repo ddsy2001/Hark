@@ -555,7 +555,9 @@ async function queryAccount(app, a, prevAcc) {
     else sumMoney = ab > 0 ? ab : pb > 0 ? pb : (Number.isFinite(sm) ? 0 : NaN);
     if (num(bal.historyOwe) > 0) owe = num(bal.historyOwe);
   }
-  const latestDay = daily.length ? daily[daily.length - 1] : null;
+  // 国网返回的日期是倒序的，按日期取真正最新的一天（仅用于日志；界面和通知在 parse() 里会排序）
+  const dayNum = (x) => Number(clean(x && x.day).replace(/\D/g, '').slice(0, 8)) || 0;
+  const latestDay = daily.reduce((best, x) => (!best || dayNum(x) > dayNum(best) ? x : best), null);
   console.log(`[SGCC] 户号${a.consNo} 解析结果: 余额=${sumMoney}, 最新日用电=${latestDay ? `${latestDay.day}:${latestDay.dayElePq}度` : '无'}, 本月累计=${monthTotal}`);
   return {
     userInfo: { consNo: a.consNo, consNo_dst: a.src, consName_dst: a.name, orgName: a.orgName, proNo: a.pro },
@@ -1161,26 +1163,24 @@ function writeLog(ctx, key, obj) {
   try { ctx.storage.set(key, JSON.stringify(obj)); } catch (_) {}
 }
 
-function checkLowBalanceState(r, env) {
-  if (!r.cache || !r.cache.list || !r.cache.list.length) return { isLow: false, p: null };
-  const picked = pickAccount(r.cache.list, env.SGCC_ACCOUNT);
-  const acc = picked.acc;
-  if (!acc) return { isLow: false, p: null };
-  const p = parse(acc);
-  const lowLimit = num(env.SGCC_LOW_BALANCE);
-  const warnLimit = Number.isFinite(lowLimit) ? lowLimit : 20;
-  const isLow = warnLimit > 0 && (p.owe || (Number.isFinite(p.balance) && p.balance < warnLimit));
-  return { isLow, p };
+function lowLimitOf(env) { const v = num(env.SGCC_LOW_BALANCE); return Number.isFinite(v) ? v : 20; }
+function maxLowOf(env) { const v = num(env.SGCC_LOW_NOTIFY_MAX); return Number.isFinite(v) && v >= 0 ? Math.floor(v) : 1; }
+
+// 逐个户号判断是否低余额。多户号时用“第N户”区分（部分账号的脱敏户号尾号完全相同，用尾号无法区分）
+function accountStates(r, env) {
+  const list = r.cache && Array.isArray(r.cache.list) ? r.cache.list : [];
+  const limit = lowLimitOf(env);
+  return list.map((acc, i) => {
+    const p = parse(acc);
+    const isLow = limit > 0 && Boolean(p.owe || (Number.isFinite(p.balance) && p.balance < limit));
+    const tail = p.consNo ? `尾号${p.consNo.replace(/\D/g, '').slice(-4) || p.consNo.slice(-4)}` : '';
+    const label = list.length > 1 ? `第${i + 1}户${p.name ? '·' + p.name : ''}` : (p.name || tail || '默认户号');
+    return { acc, p, isLow, label, id: md5hex(clean(p.consNo) || String(i)).slice(0, 6) };
+  });
 }
 
-function sendDailyNotify(ctx, r, env, { allowLowWarn = true } = {}) {
-  const { isLow, p } = checkLowBalanceState(r, env);
-  if (!p) return { sent: false, usedLowWarn: false };
-
-  const showLowWarn = isLow && allowLowWarn;
-  const tail = p.consNo ? `尾号${p.consNo.replace(/\D/g, '').slice(-4) || p.consNo.slice(-4)}` : '';
-  const acctLabel = p.name || tail || '默认户号';
-
+function sendAccountNotify(ctx, r, st, { lowWarn = false } = {}) {
+  const p = st.p;
   const balStr = p.owe ? `欠费 ¥${money(p.balance)}` : `¥${money(p.balance)}`;
   const daysStr = Number.isFinite(p.days) ? `（预计可用 ${fmt(p.days, 0)} 天）` : '';
 
@@ -1199,25 +1199,34 @@ function sendDailyNotify(ctx, r, env, { allowLowWarn = true } = {}) {
       ? `⚠️ 余额未能刷新（国网繁忙），为${Number.isFinite(p.balTs) ? ' ' + updText(p.balTs) + ' 的' : '旧'}缓存数据`
       : (p.dailyStale ? '⚠️ 国网日用电接口繁忙，昨日用电为上次缓存数据' : '');
 
-  const title = showLowWarn
+  const title = lowWarn
     ? (p.owe ? '⚠️ 网上国网 · 电费欠费提醒' : '⚠️ 网上国网 · 电费余额不足提醒')
     : '⚡ 网上国网 · 每日电费播报';
-  const subtitle = `${acctLabel}｜剩余电费 ${balStr}${daysStr}`;
+  const subtitle = `${st.label}｜剩余电费 ${balStr}${daysStr}`;
   const body = [yStr, [mStr, tStr].filter(Boolean).join(' · '), errNote].filter(Boolean).join('\n');
 
   try {
     console.log(`[SGCC] 发送通知 -> ${title} | ${subtitle} | ${body.replace(/\n/g, ' / ')}`);
-    ctx.notify({
-      title,
-      subtitle,
-      body,
-      sound: true,
-    });
-    return { sent: true, usedLowWarn: showLowWarn };
+    ctx.notify({ title, subtitle, body, sound: true });
+    return true;
   } catch (e) {
     console.log(`[SGCC] 通知发送异常: ${(e && e.message) || e}`);
-    return { sent: false, usedLowWarn: false };
+    return false;
   }
+}
+
+// 对每个低余额户号发提醒，每户每天最多 SGCC_LOW_NOTIFY_MAX 次；skip 为已在播报里提醒过的户号。返回是否有改动
+function sendLowAlerts(ctx, r, env, states, map, todayKey, skip) {
+  const maxLow = maxLowOf(env);
+  let changed = false;
+  for (const s of states) {
+    if (s === skip || !s.isLow || maxLow <= 0) continue;
+    const k = `${todayKey}_low_${s.id}`;
+    const n = Number(map[k] || 0);
+    if (n >= maxLow) { console.log(`[SGCC] ${s.label} 余额偏低，但今日提醒次数已达上限(${maxLow})`); continue; }
+    if (sendAccountNotify(ctx, r, s, { lowWarn: true })) { map[k] = n + 1; changed = true; }
+  }
+  return changed;
 }
 
 export default async function (ctx) {
@@ -1285,19 +1294,22 @@ export default async function (ctx) {
       try { ctx.notify({ title: '网上国网', body: r.error.slice(0, 120) }); } catch (_) {}
       return;
     }
-    const maxLowRaw = num(env.SGCC_LOW_NOTIFY_MAX);
-    const maxLow = Number.isFinite(maxLowRaw) && maxLowRaw >= 0 ? Math.floor(maxLowRaw) : 1;
-    const lowCountKey = `${todayKey}_low_count`;
-    const curLowCount = Number(nextMap[lowCountKey] || 0);
-    const res = sendDailyNotify(ctx, r, env, { allowLowWarn: curLowCount < maxLow });
-    if (res.usedLowWarn) {
-      nextMap[lowCountKey] = curLowCount + 1;
-      writeLog(ctx, notifyStoreKey, nextMap);
-    }
+    const states = accountStates(r, env);
+    if (!states.length) return;
+    // 每日播报：模块「户号」选中的那一户（默认第一户）；它若低余额且未超当日上限，播报标题直接变为余额不足提醒
+    const pickedAcc = pickAccount(r.cache.list, env.SGCC_ACCOUNT).acc;
+    const main = states.find((s) => s.acc === pickedAcc) || states[0];
+    const maxLow = maxLowOf(env);
+    const mainKey = `${todayKey}_low_${main.id}`;
+    const mainLow = main.isLow && maxLow > 0 && Number(nextMap[mainKey] || 0) < maxLow;
+    if (sendAccountNotify(ctx, r, main, { lowWarn: mainLow }) && mainLow) nextMap[mainKey] = Number(nextMap[mainKey] || 0) + 1;
+    // 其余户号：低于阈值的单独提醒
+    sendLowAlerts(ctx, r, env, states, nextMap, todayKey, main);
+    writeLog(ctx, notifyStoreKey, nextMap);
     return;
   }
 
-  // 2. 后台定时静默更新缓存任务（同时根据低余额每日提醒上限检查是否需要低余额预警）
+  // 2. 后台定时静默更新缓存任务（同时逐户检查低余额，按每户每日上限提醒）
   if (clean(env.SGCC_SCHEDULE) === 'true') {
     console.log('[SGCC定时更新] 开始执行后台定时刷新任务...');
     const r = await getData(ctx, true);
@@ -1305,26 +1317,15 @@ export default async function (ctx) {
       try { ctx.notify({ title: '网上国网', body: r.error.slice(0, 120) }); } catch (_) {}
       return;
     }
-    const maxLowRaw = num(env.SGCC_LOW_NOTIFY_MAX);
-    const maxLow = Number.isFinite(maxLowRaw) && maxLowRaw >= 0 ? Math.floor(maxLowRaw) : 1;
-    if (maxLow > 0) {
-      const { isLow } = checkLowBalanceState(r, env);
-      if (isLow) {
-        const now = cnNow();
-        const todayKey = `${now.y}${String(now.m).padStart(2, '0')}${String(now.d).padStart(2, '0')}`;
-        const username = clean(env.SGCC_USERNAME);
-        const notifyStoreKey = uk('sgcc_hark_notify_log', username || 'default');
-        const notifiedMap = readLog(ctx, notifyStoreKey);
-        const lowCountKey = `${todayKey}_low_count`;
-        const curLowCount = Number(notifiedMap[lowCountKey] || 0);
-        if (curLowCount < maxLow) {
-          const nextMap = {};
-          Object.keys(notifiedMap).forEach((k) => { if (k.startsWith(todayKey) || k === '_lastRawTime') nextMap[k] = notifiedMap[k]; });
-          nextMap[lowCountKey] = curLowCount + 1;
-          writeLog(ctx, notifyStoreKey, nextMap);
-          sendDailyNotify(ctx, r, env, { allowLowWarn: true });
-        }
-      }
+    const states = accountStates(r, env);
+    if (states.some((s) => s.isLow) && maxLowOf(env) > 0) {
+      const now = cnNow();
+      const todayKey = `${now.y}${String(now.m).padStart(2, '0')}${String(now.d).padStart(2, '0')}`;
+      const notifyStoreKey = uk('sgcc_hark_notify_log', clean(env.SGCC_USERNAME) || 'default');
+      const notifiedMap = readLog(ctx, notifyStoreKey);
+      const nextMap = {};
+      Object.keys(notifiedMap).forEach((k) => { if (k.startsWith(todayKey) || k === '_lastRawTime') nextMap[k] = notifiedMap[k]; });
+      if (sendLowAlerts(ctx, r, env, states, nextMap, todayKey, null)) writeLog(ctx, notifyStoreKey, nextMap);
     }
     return;
   }
