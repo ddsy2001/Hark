@@ -899,15 +899,17 @@ function flexBars(vals, H, opts = {}) {
     if (latest) bar.backgroundColor = latestC;
     else if (hot) bar.backgroundColor = hotC;
     else bar.backgroundGradient = { type: 'linear', colors: [hexA(top, fade), hexA(bottom, fade)], startPoint: { x: 0, y: 0 }, endPoint: { x: 0, y: 1 } };
+    // 列内不用 gap（之前 spacer/柱子/标签之间各有 2pt 隐形间距，实际高度会超出声明高度）；柱子与标签之间固定 2pt
     const kids = [spacer(), bar];
     if (labels) {
       let color = opts.weekend && opts.weekend[i] ? '#64D2FF99' : C.faint, weight = 'regular';
       if (hot) { color = hotC; weight = 'semibold'; }
       if (opts.strong && opts.strong[i]) { color = C.dim; weight = 'semibold'; }
       if (latest) { color = latestC; weight = 'bold'; }
-      kids.push(T(labels[i], ls, color, weight, { minScale: 0.4 }));
+      kids.push({ type: 'spacer', length: 2 }, T(labels[i], ls, color, weight, { minScale: 0.4 }));
     }
-    return { type: 'stack', direction: 'column', alignItems: 'center', flex: 1, gap: 2, height: H + (labels ? ls + 4 : 0), children: kids };
+    // 标签文字行高约为字号的 1.3 倍
+    return { type: 'stack', direction: 'column', alignItems: 'center', flex: 1, gap: 0, height: H + (labels ? 2 + Math.ceil(ls * 1.3) : 0), children: kids };
   });
   return row(cols, { gap, alignItems: 'end' });
 }
@@ -1081,16 +1083,18 @@ function buildLarge(p, r) {
             statCell('chart.bar.fill', C.teal, '今年', fmt(p.yearUse, 0), '度', Number.isFinite(p.yearCost) ? `¥${money(p.yearCost)}` : '', null, 52)], { gap: 6, height: 52 }),
         ], { gap: 6, flex: 1.6 }),
       ], { gap: 6, height: 110 }),
+      // 近30日卡片在 6.1 寸机型上只分到约 72pt 高；原来柱高 46pt + 两处间距需要约 92pt，最高的柱子会顶进标题行挡住文字。
+      // 现在：卡片内间距为 0（标题与图表之间只留 3pt），柱高 34pt，整体约 75pt；月度图柱高 36→28 再让出约 7pt
       glass([
         row([icon('chart.bar.xaxis', C.brand, 10), T(`近${list.length || 30}日用电`, 10, C.text, 'semibold'), T(rangeText(list), 8, C.faint), spacer(),
           T(`日均 ${fmt(avg)}`, 9, C.dim), legend(`峰值 ${fmt(peak)}`)], { gap: 4 }),
         spacer(),
-        (() => { const d = dayLabels(list); return flexBars(vals, 46, { labels: d.labels, weekend: d.weekend, strong: d.strong, size: 6 }); })(),
-      ], { gap: 4, padding: [8, 10], borderRadius: 14, flex: 1 }),
+        (() => { const d = dayLabels(list); return { ...flexBars(vals, 34, { labels: d.labels, weekend: d.weekend, strong: d.strong, size: 6 }), padding: [3, 0, 0, 0] }; })(),
+      ], { gap: 0, padding: [8, 10], borderRadius: 14, flex: 1 }),
       glass([
         row([icon('calendar.badge.clock', '#BF5AF2', 10), T(`${new Date().getFullYear()} 年月度用电`, 10, C.text, 'semibold'), spacer(),
           T(mv.length ? `共 ${mv.length} 个月` : '暂无', 9, C.dim)], { gap: 4 }),
-        flexBars(mv, 36, { top: '#BF5AF2', bottom: '#5E5CE6', latest: '#DA8FFF', labels: mv.map((_, i) => `${i + 1}月`), size: 8 }),
+        flexBars(mv, 28, { top: '#BF5AF2', bottom: '#5E5CE6', latest: '#DA8FFF', labels: mv.map((_, i) => `${i + 1}月`), size: 8 }),
       ], { gap: 4, padding: [8, 10], borderRadius: 14 }),
       e || row([icon('building.2', C.faint, 9), T(p.org || '国家电网', 8, C.faint), spacer(), T(p.billDate ? `余额截至 ${p.billDate}` : '', 8, C.faint)], { gap: 3 }),
     ],
@@ -1166,7 +1170,7 @@ function writeLog(ctx, key, obj) {
 function lowLimitOf(env) { const v = num(env.SGCC_LOW_BALANCE); return Number.isFinite(v) ? v : 20; }
 function maxLowOf(env) { const v = num(env.SGCC_LOW_NOTIFY_MAX); return Number.isFinite(v) && v >= 0 ? Math.floor(v) : 1; }
 
-// 逐个户号判断是否低余额。多户号时用“第N户”区分（部分账号的脱敏户号尾号完全相同，用尾号无法区分）
+// 逐个户号判断是否低余额。多户号时标为“第N户·户名/尾号”
 function accountStates(r, env) {
   const list = r.cache && Array.isArray(r.cache.list) ? r.cache.list : [];
   const limit = lowLimitOf(env);
@@ -1174,7 +1178,7 @@ function accountStates(r, env) {
     const p = parse(acc);
     const isLow = limit > 0 && Boolean(p.owe || (Number.isFinite(p.balance) && p.balance < limit));
     const tail = p.consNo ? `尾号${p.consNo.replace(/\D/g, '').slice(-4) || p.consNo.slice(-4)}` : '';
-    const label = list.length > 1 ? `第${i + 1}户${p.name ? '·' + p.name : ''}` : (p.name || tail || '默认户号');
+    const label = list.length > 1 ? `第${i + 1}户${p.name || tail ? '·' + (p.name || tail) : ''}` : (p.name || tail || '默认户号');
     return { acc, p, isLow, label, id: md5hex(clean(p.consNo) || String(i)).slice(0, 6) };
   });
 }
