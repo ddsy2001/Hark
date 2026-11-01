@@ -546,7 +546,10 @@ async function queryAccount(app, a, prevAcc) {
   }
 
   // 转成和原兼容层一致的结构，界面层不用改
-  let sumMoney = num(prevBill.sumMoney), owe = num(prevBill.historyOwe) || 0;
+  // 余额接口拿到新数据时，余额和欠费都从零开始重新判断（和原作者一致）；只有余额接口失败时才沿用上次缓存。
+  // 之前这里欠费也从缓存起步，预付费户又没有地方把它清零，一旦某次（如月初出账期间）被标记欠费就会一直显示“欠费”
+  let sumMoney = bal ? NaN : num(prevBill.sumMoney);
+  let owe = bal ? 0 : (num(prevBill.historyOwe) || 0);
   if (bal) {
     const sm = num(bal.sumMoney), ab = num(bal.accountBalance), pb = num(bal.prepayBal);
     console.log(`[SGCC] 户号${a.consNo} 余额接口原始字段: consType=${bal.consType}, sumMoney=${bal.sumMoney}, prepayBal=${bal.prepayBal}, accountBalance=${bal.accountBalance}, historyOwe=${bal.historyOwe}, date=${bal.date || bal.amtTime || ''}`);
@@ -555,10 +558,10 @@ async function queryAccount(app, a, prevAcc) {
     else sumMoney = ab > 0 ? ab : pb > 0 ? pb : (Number.isFinite(sm) ? 0 : NaN);
     if (num(bal.historyOwe) > 0) owe = num(bal.historyOwe);
   }
-  // 国网返回的日期是倒序的，按日期取真正最新的一天（仅用于日志；界面和通知在 parse() 里会排序）
-  const dayNum = (x) => Number(clean(x && x.day).replace(/\D/g, '').slice(0, 8)) || 0;
-  const latestDay = daily.reduce((best, x) => (!best || dayNum(x) > dayNum(best) ? x : best), null);
-  console.log(`[SGCC] 户号${a.consNo} 解析结果: 余额=${sumMoney}, 最新日用电=${latestDay ? `${latestDay.day}:${latestDay.dayElePq}度` : '无'}, 本月累计=${monthTotal}`);
+  // 国网返回的日期是倒序的，且月初会带上本月未来日期（用电量为“-”）；取有数值的最新一天（仅用于日志）
+  const dayNum = (x) => (Number.isFinite(num(x && x.dayElePq)) ? Number(clean(x && x.day).replace(/\D/g, '').slice(0, 8)) || 0 : 0);
+  const latestDay = daily.reduce((best, x) => (dayNum(x) && (!best || dayNum(x) > dayNum(best)) ? x : best), null);
+  console.log(`[SGCC] 户号${a.consNo} 解析结果: 余额=${sumMoney}, 欠费=${owe > 0 || sumMoney < 0 ? '是' : '否'}, 最新日用电=${latestDay ? `${latestDay.day}:${latestDay.dayElePq}度` : '无'}, 本月累计=${monthTotal}`);
   return {
     userInfo: { consNo: a.consNo, consNo_dst: a.src, consName_dst: a.name, orgName: a.orgName, proNo: a.pro },
     eleBill: { sumMoney, historyOwe: owe, prepayBal: bal ? num(bal.prepayBal) : num(prevBill.prepayBal), date: bal ? clean(bal.date || bal.amtTime) : clean(prevBill.date), balTs: bal ? Date.now() : num(prevBill.balTs) },
