@@ -1,6 +1,10 @@
 name: 网上国网（Hark 液态玻璃 · 每日电费推送版）
-description: 国家电网电费余额、昨日/本月/上月用电、近 30 日与月度柱状图；支持自定义精确到「时:分」的每日电费通知推送（含剩余电费、可用天数、昨日用电度数与电费）。直连网上国网 App 接口，不经第三方网关
-author: Hark & ddsy2001（版式参考 jadkg 南方电网小组件；App 协议移植自 stevenjoezhang/hass-state-grid，MIT）
+description: |
+  # 国家电网电费余额、昨日/本月/上月用电、近 30 日与月度柱状图（小/中/大号与锁屏）
+  # 支持自定义精确到「时:分」的每日电费通知推送与多户号低余额独立预警
+  # 内置全国 31 省阶梯电价与分界（支持年/月/双月/季节阶梯），按户号归属省自动切换并在标题栏显示当前阶梯单价
+  # 直连网上国网 App 接口，不经第三方网关；电价数据核对截至 2026-11-11（源自 95598 及各省发改委）
+author: Hark & ddsy2001（版式参考 jadkg；电价表参考 idodo777；App 协议移植自 stevenjoezhang/hass-state-grid，MIT）
 icon: https://is1-ssl.mzstatic.com/image/thumb/Purple116/v4/83/d8/8a/83d88a92-5a4d-7a2f-118c-80d795e7a9f6/AppIcon-0-0-1x_U007emarketing-0-5-0-0-sRGB-85-220.png/144x144.png
 compat_arguments:
   NOTIFY_CRON: '* * * * *'
@@ -21,6 +25,43 @@ env_schema:
     name: 户号（可选）
     description: 多个户号时填要显示的户号或尾号，也可填 #2 表示第 2 个；留空显示第一个。想不同小组件显示不同户号，在各自小组件的环境变量里填
     default_value: ''
+  SGCC_REGION:
+    name: 所在省份
+    description: 默认「自动」会按户号归属省自动切换当地阶梯电价与分界（含年/月/双月及季节阶梯）；识别不准时也可手动选择省份
+    default_value: 自动
+    options:
+      - 自动
+      - 湖北
+      - 北京
+      - 浙江
+      - 江苏
+      - 上海
+      - 广东
+      - 山东
+      - 四川
+      - 河南
+      - 河北
+      - 湖南
+      - 安徽
+      - 福建
+      - 天津
+      - 重庆
+      - 陕西
+      - 江西
+      - 辽宁
+      - 山西
+      - 广西
+      - 黑龙江
+      - 吉林
+      - 云南
+      - 贵州
+      - 内蒙古
+      - 甘肃
+      - 海南
+      - 宁夏
+      - 青海
+      - 新疆
+      - 西藏
   SGCC_NOTIFY_ENABLED:
     name: 每日电费通知
     description: 开启后每天在设定的「每日通知时间」推送剩余电费、预计可用天数及昨日用电量与电费
@@ -48,11 +89,11 @@ env_schema:
       - '5'
   SGCC_PRICE:
     name: 电价单价（元/度，可选）
-    description: 用于估算昨日及本月电费；留空则自动按近期月账单平均电价或阶梯电价计算
+    description: 留空则自动按所在省份当前阶梯电价或近期账单均价计算；峰谷电或合表户可手动填均价覆盖
     default_value: ''
   SGCC_TIERS:
     name: 阶梯分界（可选）
-    description: 年用电阶梯分界度数，逗号分隔；北京默认 2880,4800，其他省份按当地标准填
+    description: 留空则按所在省份标准自动切换，一般无需填写；仅当地政策特殊时手动填两个分界度数（逗号分隔）
     default_value: ''
   SGCC_POLICY:
     name: 国网请求策略
@@ -71,13 +112,13 @@ env_schema:
 scriptings:
 - generic:
     name: sgcc-hark
-    script_url: https://raw.githubusercontent.com/ddsy2001/Hark/main/sgcc-hark.js?v=20261102-0030
+    script_url: https://raw.githubusercontent.com/ddsy2001/Hark/main/sgcc-hark.js?v=20261113-0115
     update_interval: 86400
     timeout: 60
 - schedule:
     name: 网上国网定时更新
     cron: '17 */6 * * *'
-    script_url: https://raw.githubusercontent.com/ddsy2001/Hark/main/sgcc-hark.js?v=20261102-0030
+    script_url: https://raw.githubusercontent.com/ddsy2001/Hark/main/sgcc-hark.js?v=20261113-0115
     update_interval: 86400
     timeout: 60
     env:
@@ -85,7 +126,7 @@ scriptings:
 - schedule:
     name: 网上国网每日电费通知
     cron: '{{{NOTIFY_CRON}}}'
-    script_url: https://raw.githubusercontent.com/ddsy2001/Hark/main/sgcc-hark.js?v=20261102-0030
+    script_url: https://raw.githubusercontent.com/ddsy2001/Hark/main/sgcc-hark.js?v=20261113-0115
     update_interval: 86400
     timeout: 60
     env:

@@ -1,0 +1,548 @@
+{
+  "provinces": [
+    {
+      "cycle": "monthly",
+      "effective": "京发改〔2020〕1708号",
+      "name": "北京市",
+      "note": "95598《北京市居民生活用电电价表》未分时基础价",
+      "prices": [
+        0.4883,
+        0.5383,
+        0.7883
+      ],
+      "short": "北京",
+      "source": "https://www.95598.cn/omg-static/omg-static/98303151113155091682801875944488.pdf",
+      "tiers": [
+        240,
+        400
+      ],
+      "uncertain": false
+    },
+    {
+      "cycle": "annual",
+      "effective": "",
+      "name": "天津市",
+      "note": "官方按月表述分界220/400、按年周期执行，折年为2640/4800",
+      "prices": [
+        0.49,
+        0.54,
+        0.79
+      ],
+      "short": "天津",
+      "source": "https://fzgg.tj.gov.cn/sy_47324/gabsycs/gdgh/202202/t20220217_5806380.html",
+      "tiers": [
+        2640,
+        4800
+      ],
+      "uncertain": false
+    },
+    {
+      "cycle": "annual",
+      "effective": "冀发改能价〔2023〕646号（目录销售电价表）",
+      "name": "河北省",
+      "note": "河北电网与冀北电网居民价相同；月分界180/280、按年清算，阶梯标准源自冀价管〔2012〕48号",
+      "prices": [
+        0.52,
+        0.57,
+        0.82
+      ],
+      "short": "河北",
+      "source": "http://www.qianan.gov.cn/main/file/oldfile/userfiles/files/140925___26%E5%8F%B7.pdf",
+      "tiers": [
+        2160,
+        3360
+      ],
+      "uncertain": false
+    },
+    {
+      "cycle": "bimonthly",
+      "effective": "晋价商字〔2012〕186号",
+      "name": "山西省",
+      "note": "双月阶梯：以两个月为抄表周期结算，原标准为月分界170/260，本行tiers为双月分界340/520；晋发改商品发〔2021〕410号确认继续执行",
+      "prices": [
+        0.477,
+        0.527,
+        0.777
+      ],
+      "short": "山西",
+      "source": "https://xxgk.qinshui.gov.cn/qsxrmzf/zcwd_xzf/202411/t20241118_2063697.shtml",
+      "tiers": [
+        340,
+        520
+      ],
+      "uncertain": false
+    },
+    {
+      "cycle": "annual",
+      "effective": "",
+      "name": "内蒙古自治区",
+      "note": "本行为蒙西价：按月结算、按年清算（月分界170/260）；蒙东无全区统一价，赤峰通辽0.485/0.535/0.785、呼伦贝尔0.465/0.515/0.765、兴安盟0.495/0.545/0.795（据自治区发改委调整通知，官方站原文未核到）",
+      "prices": [
+        0.415,
+        0.465,
+        0.715
+      ],
+      "short": "内蒙古",
+      "source": "https://fgw.xlgl.gov.cn/fgw/ywgz/jgsf/jfgs/jggs/2023112710530866099/index.html",
+      "tiers": [
+        2040,
+        3120
+      ],
+      "uncertain": true
+    },
+    {
+      "cycle": "annual",
+      "effective": "辽价发〔2017〕51号，2017年8月1日",
+      "name": "辽宁省",
+      "note": "月分界220/310、按年周期，折年2640/3720",
+      "prices": [
+        0.5,
+        0.55,
+        0.8
+      ],
+      "short": "辽宁",
+      "source": "https://fgw.ln.gov.cn/fgw/xxgk/jyta/srddbjy/sssjrdschy2020n/285C9708FDAD4DA9AB23444FA67D3C88/index.shtml",
+      "tiers": [
+        2640,
+        3720
+      ],
+      "uncertain": false
+    },
+    {
+      "cycle": "annual",
+      "effective": "吉发改价格〔2021〕774号",
+      "name": "吉林省",
+      "prices": [
+        0.525,
+        0.575,
+        0.825
+      ],
+      "short": "吉林",
+      "source": "https://www.95598.cn/omg-static//omg-static/99303300922378622684801372354260.pdf",
+      "tiers": [
+        2040,
+        3120
+      ],
+      "uncertain": false
+    },
+    {
+      "cycle": "annual",
+      "effective": "2021年1月1日",
+      "name": "黑龙江省",
+      "prices": [
+        0.51,
+        0.56,
+        0.81
+      ],
+      "short": "黑龙江",
+      "source": "https://www.hlj.gov.cn/hlj/c107931/202101/c00_30633728.shtml",
+      "tiers": [
+        2040,
+        3120
+      ],
+      "uncertain": false
+    },
+    {
+      "cycle": "annual",
+      "effective": "",
+      "name": "上海市",
+      "note": "《上海市销售电价表》未分时基础价",
+      "prices": [
+        0.617,
+        0.667,
+        0.917
+      ],
+      "short": "上海",
+      "source": "https://www.shanghai.gov.cn/cmsres/10/10ca08fd136a4bce9d3f9f6861367dc0/5225e6f0ef2243d7238b9b073bf2d078.xlsx",
+      "tiers": [
+        3120,
+        4800
+      ],
+      "uncertain": false
+    },
+    {
+      "cycle": "annual",
+      "effective": "2019年7月1日",
+      "name": "江苏省",
+      "prices": [
+        0.5283,
+        0.5783,
+        0.8283
+      ],
+      "short": "江苏",
+      "source": "https://fg.suzhou.gov.cn/szfgw/msjg/201907/b9afd33f99e549e1a8885ea95af48f7b.shtml",
+      "tiers": [
+        2760,
+        4800
+      ],
+      "uncertain": false
+    },
+    {
+      "cycle": "annual",
+      "effective": "2021年1月1日",
+      "name": "浙江省",
+      "note": "《浙江省电网销售电价表》；第三监管周期确认居民继续执行现行目录销售电价",
+      "prices": [
+        0.538,
+        0.588,
+        0.838
+      ],
+      "short": "浙江",
+      "source": "https://www.xiangshan.gov.cn/art/2024/5/30/art_1229796252_59176250.html",
+      "tiers": [
+        2760,
+        4800
+      ],
+      "uncertain": false
+    },
+    {
+      "cycle": "annual",
+      "effective": "2021年10月25日",
+      "name": "安徽省",
+      "prices": [
+        0.5653,
+        0.6153,
+        0.8653
+      ],
+      "short": "安徽",
+      "source": "https://fgw.xuancheng.gov.cn/OpennessContent/show/3035927.html",
+      "tiers": [
+        2160,
+        4200
+      ],
+      "uncertain": false
+    },
+    {
+      "cycle": "monthly",
+      "effective": "",
+      "name": "福建省",
+      "prices": [
+        0.4983,
+        0.5483,
+        0.7983
+      ],
+      "short": "福建",
+      "source": "https://fgw.fuzhou.gov.cn/zfxxgkzl/zfxxgkml/ywgz/jgysf/202012/P020201216588503895587.pdf",
+      "tiers": [
+        230,
+        420
+      ],
+      "uncertain": false
+    },
+    {
+      "cycle": "annual",
+      "effective": "赣发改商价字〔2012〕1229号",
+      "name": "江西省",
+      "note": "赣发改价管〔2020〕997号确认价格不变，二档上限4200",
+      "prices": [
+        0.6,
+        0.65,
+        0.9
+      ],
+      "short": "江西",
+      "source": "https://www.shangyou.gov.cn/syxxxgk/c129479/202608/3bf41612ee6345ea853d914a0404988c.shtml",
+      "tiers": [
+        2160,
+        4200
+      ],
+      "uncertain": false
+    },
+    {
+      "cycle": "annual",
+      "effective": "鲁发改价格〔2019〕509号，2019年7月1日",
+      "name": "山东省",
+      "note": "省政府公报原文：年用电量2520度及以下执行一档价（月分界210/400、按年周期）",
+      "prices": [
+        0.5469,
+        0.5969,
+        0.8469
+      ],
+      "short": "山东",
+      "source": "http://gb.shandong.gov.cn/art/2019/7/9/art_100623_27208.html",
+      "tiers": [
+        2520,
+        4800
+      ],
+      "uncertain": false
+    },
+    {
+      "cycle": "annual",
+      "effective": "2021年10月15日",
+      "name": "河南省",
+      "prices": [
+        0.56,
+        0.61,
+        0.86
+      ],
+      "short": "河南",
+      "source": "https://fgw.henan.gov.cn/2021/10-20/2330188.html",
+      "tiers": [
+        2160,
+        3120
+      ],
+      "uncertain": false
+    },
+    {
+      "cycle": "annual",
+      "effective": "鄂发改价管〔2021〕330号",
+      "name": "湖北省",
+      "prices": [
+        0.558,
+        0.608,
+        0.858
+      ],
+      "short": "湖北",
+      "source": "https://fgw.wuhan.gov.cn/zfxxgk/zfxxgk_4/sysf/202511/P020251202579393991744.xlsx",
+      "tiers": [
+        2160,
+        4800
+      ],
+      "uncertain": false
+    },
+    {
+      "cycle": "monthly",
+      "effective": "2024年2月1日",
+      "name": "湖南省",
+      "note": "分季节：春秋（3、4、5、9、10、11月）分界200/350，冬夏（1、2、6、7、8、12月）二档上限450，本行填春秋值；一档200为2024年2月1日起的新标准（原180）；季节月份另有按抄表月划分的表述",
+      "prices": [
+        0.588,
+        0.638,
+        0.888
+      ],
+      "short": "湖南",
+      "source": "https://fgw.hunan.gov.cn/xxgk_70899/tzgg/202401/t20240131_32640228.html",
+      "tiers": [
+        200,
+        350
+      ],
+      "uncertain": true
+    },
+    {
+      "cycle": "monthly",
+      "effective": "",
+      "name": "广东省",
+      "note": "广东分地市定价、无全省统一价，本行价格取广州市政府公布的广州现行价（约值，其他城市不同）；分界全省统一：夏季（5-10月）260/600、非夏季200/400，加价幅度统一+0.05/+0.30元",
+      "prices": [
+        0.589,
+        0.639,
+        0.889
+      ],
+      "short": "广东",
+      "source": "https://www.gz.gov.cn/zwfw/zxfw/ggfw/content/mpost_10811673.html",
+      "tiers": [
+        260,
+        600
+      ],
+      "uncertain": true
+    },
+    {
+      "cycle": "annual",
+      "effective": "桂发改价格〔2023〕404号（单价）",
+      "name": "广西壮族自治区",
+      "note": "分档按自治区物价局完善通知：阶梯由按月改为按年执行，年分界2040/3240（月均170/270）；民间汇总所称3120/4440仅见于民间文章，未见官方文件支持",
+      "prices": [
+        0.5283,
+        0.5783,
+        0.8283
+      ],
+      "short": "广西",
+      "source": "http://fgw.gxzf.gov.cn/zfxxgkzl/wjzx/tzgg/t6750621.shtml",
+      "tiers": [
+        2040,
+        3240
+      ],
+      "uncertain": true
+    },
+    {
+      "cycle": "monthly",
+      "effective": "琼发改价管〔2019〕611号",
+      "name": "海南省",
+      "note": "分季节：夏季（4-10月）分界220/360，冬季（11月-次年3月）160/290，本行填夏季值",
+      "prices": [
+        0.6083,
+        0.6583,
+        0.9083
+      ],
+      "short": "海南",
+      "source": "http://plan.hainan.gov.cn/sfgw/jggb/201811/8a6f50dfbe094cb3a2d3c824bc4e482a.shtml",
+      "tiers": [
+        220,
+        360
+      ],
+      "uncertain": true
+    },
+    {
+      "cycle": "annual",
+      "effective": "渝发改价格〔2021〕1330号，2021年10月15日",
+      "name": "重庆市",
+      "prices": [
+        0.52,
+        0.57,
+        0.82
+      ],
+      "short": "重庆",
+      "source": "https://www.cq.gov.cn/zt/yhyshj/zcjj/hddl/202112/t20211230_10260372.html",
+      "tiers": [
+        2400,
+        4800
+      ],
+      "uncertain": false
+    },
+    {
+      "cycle": "monthly",
+      "effective": "川发改价格〔2021〕401号",
+      "name": "四川省",
+      "note": "2026年起夏季（7-9月）月分界提高至260/460，其余月份180/280，价格不变；本行填常月值",
+      "prices": [
+        0.5224,
+        0.6224,
+        0.8224
+      ],
+      "short": "四川",
+      "source": "http://www.jingyan.gov.cn/jyx/zcjd/202302/6be97bab2c654f3b8235fa932fdb9383.shtml",
+      "tiers": [
+        180,
+        280
+      ],
+      "uncertain": true
+    },
+    {
+      "cycle": "annual",
+      "effective": "",
+      "name": "贵州省",
+      "note": "单价经省发改委《贵州省电网销售电价表》核实；分界官方文字源未核实、沿用旧值",
+      "prices": [
+        0.4556,
+        0.5056,
+        0.7556
+      ],
+      "short": "贵州",
+      "source": "https://fgw.guizhou.gov.cn/fggz/tzgg/201804/W020180425601633547315.pdf",
+      "tiers": [
+        3000,
+        4700
+      ],
+      "uncertain": true
+    },
+    {
+      "cycle": "annual",
+      "effective": "2016年8月1日",
+      "name": "云南省",
+      "note": "电能替代四档结构：年1560度内0.36元、1561-3600度0.45元、3601-4680度0.5元、4680度以上0.8元，schema仅存前三档价与前两处分界；另目录销售电价表列枯期（12月-次年4月）月阶梯170/260、一档0.4236元，属补贴前目录价口径",
+      "prices": [
+        0.36,
+        0.45,
+        0.5
+      ],
+      "short": "云南",
+      "source": "https://www.yjx.gov.cn/yjxzfxxgk/tzgg10619/20160805/537672.html",
+      "tiers": [
+        1560,
+        3600
+      ],
+      "uncertain": true
+    },
+    {
+      "cycle": "monthly",
+      "effective": "藏政办发〔2023〕28号，2023年12月1日",
+      "name": "西藏自治区",
+      "note": "分季节阶梯，本行为枯水期（1-4月、11-12月）；丰水期（5-10月）为递减阶梯：分界100/200，价格0.49/0.4165/0.343元；全区统一基础价0.49元",
+      "prices": [
+        0.49,
+        0.539,
+        0.588
+      ],
+      "short": "西藏",
+      "source": "https://www.xizang.gov.cn/zwgk/xxfb/zbwj/202311/t20231129_391193.html",
+      "tiers": [
+        300,
+        400
+      ],
+      "uncertain": true
+    },
+    {
+      "cycle": "annual",
+      "effective": "陕发改价格〔2021〕1643号",
+      "name": "陕西省",
+      "note": "年周期为当年7月1日至次年6月30日；本行为不含榆林价，榆林地区一档0.49元，其余档位分界与加价与全省相同",
+      "prices": [
+        0.4983,
+        0.5483,
+        0.7983
+      ],
+      "short": "陕西",
+      "source": "https://sndrc.shaanxi.gov.cn/zfxxgk/zc/fgwj/sfzggwwj/2022_512/202304/P020241107390326161980.xls",
+      "tiers": [
+        2160,
+        4200
+      ],
+      "uncertain": false
+    },
+    {
+      "cycle": "monthly",
+      "effective": "甘发改商价〔2012〕881号，2012年7月1日",
+      "name": "甘肃省",
+      "prices": [
+        0.51,
+        0.56,
+        0.81
+      ],
+      "short": "甘肃",
+      "source": "https://www.jingtai.gov.cn/zfxxgk/bmhxzxxgk/xzfzcbmzsjgml/xgxj/fdzdgknr/jytabl/rdjy/art/2023/art_db23aa69d10f40159eebb4793d33568c.html",
+      "tiers": [
+        160,
+        240
+      ],
+      "uncertain": false
+    },
+    {
+      "cycle": "monthly",
+      "effective": "青发改价格〔2012〕852号（阶梯标准）；青发改价格〔2023〕317号确认继续执行现行目录销售电价",
+      "name": "青海省",
+      "note": "数值经省发改委第三监管周期通知（附目录销售电价表）与新华网报道核实；省发改委官网原文页未检索到，source为该通知的转载页",
+      "prices": [
+        0.3771,
+        0.4271,
+        0.6771
+      ],
+      "short": "青海",
+      "source": "https://www.cpem.cn/list/3/1825.html",
+      "tiers": [
+        150,
+        230
+      ],
+      "uncertain": false
+    },
+    {
+      "cycle": "monthly",
+      "effective": "宁发改价格（管理）〔2021〕738号，2021年10月22日",
+      "name": "宁夏回族自治区",
+      "prices": [
+        0.4486,
+        0.4986,
+        0.7486
+      ],
+      "short": "宁夏",
+      "source": "https://www.95598.cn/omg-static/omg-static/99307240929117122198001773013249.pdf",
+      "tiers": [
+        170,
+        260
+      ],
+      "uncertain": false
+    },
+    {
+      "cycle": "annual",
+      "effective": "2017年7月1日",
+      "name": "新疆维吾尔自治区",
+      "note": "无阶梯电价；目录销售电价按地区为0.37-0.533元不等，自治区财政补贴后全区居民到户电价统一0.39元（2017年7月1日起城乡同网同价）",
+      "prices": [
+        0.39
+      ],
+      "short": "新疆",
+      "source": "https://www.xjhs.gov.cn/xjhsx/c117554/202510/e32a633d194d4100a27c9cf695faa9aa.shtml",
+      "tiers": [],
+      "uncertain": false
+    }
+  ],
+  "updated": "2026-11-11"
+}

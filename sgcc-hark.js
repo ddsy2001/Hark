@@ -8,6 +8,7 @@
  */
 
 // 会话、验证码、缓存按登录手机号分开存，多个账号的小组件互不覆盖
+const SG_VER = '20261113-0115';
 function uk(base, user) { return `${base}_${md5hex(String(user)).slice(0, 8)}`; }
 const K = { data: 'sgcc_hark_data2', err: 'sgcc_hark_err2', lock: 'sgcc_hark_lock', dev: 'sgcc_app_dev', sess: 'sgcc_app_sess', sms: 'sgcc_app_sms', loginBlock: 'sgcc_app_loginblock' };
 
@@ -268,6 +269,7 @@ const P_MONTH = 'emss-bia-bill-front/member/c51/f04';
 const P_BAL = 'emss-bia-balance-front/member/c16/f01';
 const CHECK_KEY = 'LNPO+ISJ+QeqNemFK+3OMUdexSn2i6pB';
 
+function isBusy(e) { return !!e && (/S1009|101009/.test(String(e.code || '')) || /S1009|系统(正|繁)忙/.test(String(e.message || ''))); }
 class SgError extends Error { constructor(code, msg) { super(msg ? `${msg}` : code); this.code = String(code || ''); } }
 
 function cnNow() { const d = new Date(Date.now() + 8 * 3600000); const p = (n, l = 2) => String(n).padStart(l, '0'); return { s14: `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}`, ms: p(d.getUTCMilliseconds(), 3), y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate(), h: d.getUTCHours(), min: d.getUTCMinutes() }; }
@@ -416,7 +418,7 @@ class SgApp {
         const waitMin = Math.min(240, 15 * 2 ** (n - 1));
         this.st(this.sk(K.loginBlock), { n, until: Date.now() + waitMin * 60000, code: String(e.code || ''), msg: String(e.message || '') });
         console.log(`[SGCC] 重新登录失败([${e.code}] ${e.message})，${waitMin} 分钟内不再尝试登录`);
-        const busy = /S1009|101009/.test(String(e.code)) || /系统正忙/.test(String(e.message));
+        const busy = isBusy(e);
         this.loginErr = busy
           ? new SgError('LOGIN_BUSY', `登录已失效，重新登录时国网繁忙（S1009），${waitMin} 分钟后自动重试`)
           : e;
@@ -436,7 +438,7 @@ class SgApp {
       try { return SgApp.check(resp); }
       catch (e) {
         console.log(`[SGCC] 接口 ${path} 响应异常(第${i + 1}次): [${e.code}] ${e.message}`);
-        if (i === 0 && (/S1009|101009/.test(e.code) || /系统正忙/.test(e.message))) {
+        if (i === 0 && isBusy(e)) {
           await new Promise((r) => setTimeout(r, 1000));
           continue;
         }
@@ -475,6 +477,7 @@ async function queryAccount(app, a, prevAcc) {
     const d = await app.authed(P_BAL, { serviceCode: '0101143', source: 'app', target: a.pro, data: { srvCode: '', serialNo: '', channelCode: '0902', funcCode: 'A1007200', acctId: app.sess.userId, userName: 'acctid01', promotType: '1', promotCode: '1', userAccountId: app.sess.userId, list: [{ consNoSrc: a.src, proCode: a.pro, sceneType: a.elec, consNo: a.consNo, orgNo: a.org }] } });
     bal = (Array.isArray(d.list) ? d.list : []).find((x) => x && typeof x === 'object') || null;
   } catch (e) {
+    e.stage = e.stage || '余额';
     if (['-200', '-201', '4006', 'RK008'].includes(e.code)) throw e;
     balStale = true;
     console.log(`[SGCC] 户号${a.consNo} 余额接口失败([${e.code}] ${e.message})，余额将标记为缓存数据`);
@@ -502,6 +505,7 @@ async function queryAccount(app, a, prevAcc) {
       (Array.isArray(d.sevenEleList) ? d.sevenEleList : []).forEach((x) => daily.push({ day: x.day, dayElePq: x.dayElePq, dayEleCost: x.dayEleAmt != null ? x.dayEleAmt : x.thisAmt != null ? x.thisAmt : x.dayEleCost != null ? x.dayEleCost : x.amt }));
       if (off === 0) monthTotal = num(d.totalPq);
     } catch (e) {
+      e.stage = e.stage || '日用电';
       if (['-200', '-201', '4006', 'RK008'].includes(e.code)) throw e;
       if (off === 0) {
         // 余额和日用电都没拿到新数据：本次刷新算失败，不更新缓存时间，界面会如实显示“更新失败，显示缓存”
@@ -535,6 +539,7 @@ async function queryAccount(app, a, prevAcc) {
       bills = list.concat(bills);
       if (list.length && y === n.y && n.m > 1) break;
     } catch (e) {
+      e.stage = e.stage || '月账单';
       if (['-200', '-201', '4006', 'RK008'].includes(e.code)) throw e;
       if (prevMonthQ && Array.isArray(prevMonthQ.mothEleList) && prevMonthQ.mothEleList.length) {
         bills = prevMonthQ.mothEleList;
@@ -546,24 +551,34 @@ async function queryAccount(app, a, prevAcc) {
   }
 
   // 转成和原兼容层一致的结构，界面层不用改
-  // 余额接口拿到新数据时，余额和欠费都从零开始重新判断（和原作者一致）；只有余额接口失败时才沿用上次缓存。
-  // 之前这里欠费也从缓存起步，预付费户又没有地方把它清零，一旦某次（如月初出账期间）被标记欠费就会一直显示“欠费”
+  // 余额接口拿到新数据时，余额和欠费都从零开始重新判断；只有余额接口失败时才沿用上次缓存。
+  // 后付费但有预存（accountBalance/prepayBal > 0）时，sumMoney 是本期应缴账单（会被预存抵扣），按预存余额展示，避免误报欠费
   let sumMoney = bal ? NaN : num(prevBill.sumMoney);
   let owe = bal ? 0 : (num(prevBill.historyOwe) || 0);
   if (bal) {
-    const sm = num(bal.sumMoney), ab = num(bal.accountBalance), pb = num(bal.prepayBal);
+    const sm = num(bal.sumMoney), ab = num(bal.accountBalance), pb = num(bal.prepayBal), ho = num(bal.historyOwe);
     console.log(`[SGCC] 户号${a.consNo} 余额接口原始字段: consType=${bal.consType}, sumMoney=${bal.sumMoney}, prepayBal=${bal.prepayBal}, accountBalance=${bal.accountBalance}, historyOwe=${bal.historyOwe}, date=${bal.date || bal.amtTime || ''}`);
-    if (String(bal.consType) === '1') sumMoney = Number.isFinite(sm) ? sm : pb;
-    else if (sm > 0) { sumMoney = -sm; owe = sm; }
-    else sumMoney = ab > 0 ? ab : pb > 0 ? pb : (Number.isFinite(sm) ? 0 : NaN);
-    if (num(bal.historyOwe) > 0) owe = num(bal.historyOwe);
+    if (String(bal.consType) === '1') {
+      sumMoney = Number.isFinite(sm) ? sm : pb;
+      if (ho > 0 && !(sumMoney > 0)) owe = ho;
+    } else if (ab > 0 || pb > 0) {
+      sumMoney = ab > 0 ? ab : pb;
+    } else if (sm > 0) {
+      sumMoney = -sm;
+      owe = sm;
+    } else if (ho > 0) {
+      sumMoney = -ho;
+      owe = ho;
+    } else {
+      sumMoney = Number.isFinite(sm) ? 0 : NaN;
+    }
   }
   // 国网返回的日期是倒序的，且月初会带上本月未来日期（用电量为“-”）；取有数值的最新一天（仅用于日志）
   const dayNum = (x) => (Number.isFinite(num(x && x.dayElePq)) ? Number(clean(x && x.day).replace(/\D/g, '').slice(0, 8)) || 0 : 0);
   const latestDay = daily.reduce((best, x) => (dayNum(x) && (!best || dayNum(x) > dayNum(best)) ? x : best), null);
   console.log(`[SGCC] 户号${a.consNo} 解析结果: 余额=${sumMoney}, 欠费=${owe > 0 || sumMoney < 0 ? '是' : '否'}, 最新日用电=${latestDay ? `${latestDay.day}:${latestDay.dayElePq}度` : '无'}, 本月累计=${monthTotal}`);
   return {
-    userInfo: { consNo: a.consNo, consNo_dst: a.src, consName_dst: a.name, orgName: a.orgName, proNo: a.pro },
+    userInfo: { consNo: a.consNo, consNo_dst: a.src, consName_dst: a.name, orgName: a.orgName, proNo: a.pro, orgNo: a.org, addrProv: clean(app.sess && app.sess.province) },
     eleBill: { sumMoney, historyOwe: owe, prepayBal: bal ? num(bal.prepayBal) : num(prevBill.prepayBal), date: bal ? clean(bal.date || bal.amtTime) : clean(prevBill.date), balTs: bal ? Date.now() : num(prevBill.balTs) },
     dayElecQuantity31: { sevenEleList: daily },
     monthElecQuantity: { mothEleList: bills, dataInfo: { totalEleNum: yearPq, totalEleCost: yearAmt } },
@@ -630,6 +645,91 @@ function dayKey(s) {
   return d.length >= 8 ? d.slice(0, 8) : '';
 }
 
+function cnYmdKey(off = 0) {
+  const d = new Date(Date.now() + 8 * 3600000 + off * 86400000);
+  return `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}${String(d.getUTCDate()).padStart(2, '0')}`;
+}
+function latestKey(list) {
+  let m = '';
+  (list || []).forEach((a) => {
+    const l = a && a.dayElecQuantity31 && a.dayElecQuantity31.sevenEleList;
+    (Array.isArray(l) ? l : []).forEach((x) => {
+      if (!Number.isFinite(num(x && x.dayElePq))) return;
+      const k = dayKey(x.day);
+      if (k && k > m) m = k;
+    });
+  });
+  return m;
+}
+// 最新一天是昨天才叫「昨日」，否则叫「最新」，避免国网月初出账或跑批延迟时把几天前的数据误标为昨日
+function dayWord(key) { return !key ? '昨日' : key === cnYmdKey(-1) ? '昨日' : key === cnYmdKey(0) ? '今日' : '最新'; }
+
+// 全国 31 省居民阶梯电价与分界内置离线表（核对截至 2026-11-11，源自 95598 与各省发改委，详见同目录 provinces.json）
+// c: 国标行政区划前两位（与国网 proNo / orgNo 前两位一致）；cy: annual=年阶梯 / monthly=月阶梯 / bimonthly=双月阶梯
+const REGIONS = [
+  { c: '11', s: '北京', cy: 'monthly', t: [240, 400], p: [0.4883, 0.5383, 0.7883] },
+  { c: '12', s: '天津', cy: 'annual', t: [2640, 4800], p: [0.49, 0.54, 0.79] },
+  { c: '13', s: '河北', cy: 'annual', t: [2160, 3360], p: [0.52, 0.57, 0.82] },
+  { c: '14', s: '山西', cy: 'bimonthly', t: [340, 520], p: [0.477, 0.527, 0.777] },
+  { c: '15', s: '内蒙古', cy: 'annual', t: [2040, 3120], p: [0.415, 0.465, 0.715] },
+  { c: '21', s: '辽宁', cy: 'annual', t: [2640, 3720], p: [0.5, 0.55, 0.8] },
+  { c: '22', s: '吉林', cy: 'annual', t: [2040, 3120], p: [0.525, 0.575, 0.825] },
+  { c: '23', s: '黑龙江', cy: 'annual', t: [2040, 3120], p: [0.51, 0.56, 0.81] },
+  { c: '31', s: '上海', cy: 'annual', t: [3120, 4800], p: [0.617, 0.667, 0.917] },
+  { c: '32', s: '江苏', cy: 'annual', t: [2760, 4800], p: [0.5283, 0.5783, 0.8283] },
+  { c: '33', s: '浙江', cy: 'annual', t: [2760, 4800], p: [0.538, 0.588, 0.838] },
+  { c: '34', s: '安徽', cy: 'annual', t: [2160, 4200], p: [0.5653, 0.6153, 0.8653] },
+  { c: '35', s: '福建', cy: 'monthly', t: [230, 420], p: [0.4983, 0.5483, 0.7983] },
+  { c: '36', s: '江西', cy: 'annual', t: [2160, 4200], p: [0.6, 0.65, 0.9] },
+  { c: '37', s: '山东', cy: 'annual', t: [2520, 4800], p: [0.5469, 0.5969, 0.8469] },
+  { c: '41', s: '河南', cy: 'annual', t: [2160, 3120], p: [0.56, 0.61, 0.86] },
+  { c: '42', s: '湖北', cy: 'annual', t: [2160, 4800], p: [0.558, 0.608, 0.858] },
+  { c: '43', s: '湖南', cy: 'monthly', t: [200, 350], p: [0.588, 0.638, 0.888] },
+  { c: '44', s: '广东', cy: 'monthly', t: [260, 600], p: [0.589, 0.639, 0.889] },
+  { c: '45', s: '广西', cy: 'annual', t: [2040, 3240], p: [0.5283, 0.5783, 0.8283] },
+  { c: '46', s: '海南', cy: 'monthly', t: [220, 360], p: [0.6083, 0.6583, 0.9083] },
+  { c: '50', s: '重庆', cy: 'annual', t: [2400, 4800], p: [0.52, 0.57, 0.82] },
+  { c: '51', s: '四川', cy: 'monthly', t: [180, 280], p: [0.5224, 0.6224, 0.8224] },
+  { c: '52', s: '贵州', cy: 'annual', t: [3000, 4700], p: [0.4556, 0.5056, 0.7556] },
+  { c: '53', s: '云南', cy: 'annual', t: [1560, 3600], p: [0.36, 0.45, 0.5] },
+  { c: '54', s: '西藏', cy: 'monthly', t: [300, 400], p: [0.49, 0.539, 0.588] },
+  { c: '61', s: '陕西', cy: 'annual', t: [2160, 4200], p: [0.4983, 0.5483, 0.7983] },
+  { c: '62', s: '甘肃', cy: 'monthly', t: [160, 240], p: [0.51, 0.56, 0.81] },
+  { c: '63', s: '青海', cy: 'monthly', t: [150, 230], p: [0.3771, 0.4271, 0.6771] },
+  { c: '64', s: '宁夏', cy: 'monthly', t: [170, 260], p: [0.4486, 0.4986, 0.7486] },
+  { c: '65', s: '新疆', cy: 'annual', t: [], p: [0.39] },
+];
+
+function resolveRegion(u, envObj, month) {
+  const want = clean(envObj.SGCC_REGION);
+  let row = null;
+  if (want && want !== '自动' && want.toLowerCase() !== 'auto') {
+    const w = want.replace(/(?:省|市|壮族自治区|回族自治区|维吾尔自治区|自治区)$/, '');
+    row = REGIONS.find((r) => r.s === want || r.s === w) || null;
+  }
+  if (!row) {
+    for (const raw of [u.proNo, u.orgNo, u.addrProv]) {
+      const code2 = clean(raw).replace(/\D/g, '').slice(0, 2);
+      if (code2.length === 2) {
+        row = REGIONS.find((r) => r.c === code2) || null;
+        if (row) break;
+      }
+    }
+  }
+  if (!row) {
+    const hint = `${clean(u.orgName)} ${clean(u.addrProv)}`.trim();
+    if (hint) row = REGIONS.find((r) => hint.includes(r.s)) || null;
+  }
+  if (!row) row = REGIONS[0];
+  let tiers = row.t.slice(), prices = row.p.slice();
+  if (row.s === '湖南' && [1, 2, 6, 7, 8, 12].includes(month)) tiers = [200, 450];
+  else if (row.s === '广东') tiers = month >= 5 && month <= 10 ? [260, 600] : [200, 400];
+  else if (row.s === '海南') tiers = month >= 4 && month <= 10 ? [220, 360] : [160, 290];
+  else if (row.s === '四川') tiers = month >= 7 && month <= 9 ? [260, 460] : [180, 280];
+  else if (row.s === '西藏' && month >= 5 && month <= 10) { tiers = [100, 200]; prices = [0.49, 0.4165, 0.343]; }
+  return { short: row.s, cycle: row.cy, tiers, prices };
+}
+
 function parse(acc) {
   const u = acc.userInfo || {};
   const bill = acc.eleBill || {};
@@ -641,8 +741,8 @@ function parse(acc) {
     .sort((a, b) => (a.key < b.key ? -1 : 1));
   const uniq = [];
   days.forEach((x) => { if (!uniq.length || uniq[uniq.length - 1].key !== x.key) uniq.push(x); });
-  const now = new Date();
-  const ym = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const cn = cnNow();
+  const ym = `${cn.y}${String(cn.m).padStart(2, '0')}`;
   const monthDays = uniq.filter((x) => x.key.startsWith(ym));
   const months = (Array.isArray(mq.mothEleList) ? mq.mothEleList : Array.isArray(mq.monthEleList) ? mq.monthEleList : [])
     .map((x) => ({ key: clean(x.month).replace(/\D/g, '').slice(0, 6), v: num(x.monthEleNum), cost: num(x.monthEleCost) }))
@@ -653,27 +753,57 @@ function parse(acc) {
   const owe = num(bill.historyOwe) > 0 || sum < 0;
   const last = uniq[uniq.length - 1] || null;
   const info = mq.dataInfo || {};
-  // 阶梯电价（年度累计）：已出账月份 + 还没出账的日用电
-  const pro = clean(u.proNo);
+
+  // 阶梯电价：默认按户号归属省（proNo）或用户所选 SGCC_REGION 自动匹配年/月/双月阶梯与单价，也支持手动填 SGCC_TIERS / SGCC_PRICE 覆盖
   const envObj = globalThis.__sgEnv || {};
+  const reg = resolveRegion(u, envObj, cn.m);
   const tierEnv = clean(envObj.SGCC_TIERS);
-  const tiers = (tierEnv || (!pro || pro === '11102' ? '2880,4800' : '')).split(/[,，\s]+/).map(Number).filter((x) => x > 0);
-  const yearKey = String(now.getFullYear());
+  const tiers = tierEnv ? tierEnv.split(/[,，\s]+/).map(Number).filter((x) => x > 0) : reg.tiers;
+  const cycle = tierEnv && tiers.length ? (tiers[0] >= 1000 ? 'annual' : reg.cycle) : reg.cycle;
+  const priceTable = reg.prices;
+  const monthUseVal = Number.isFinite(num(acc.monthTotal)) ? num(acc.monthTotal) : monthDays.length ? monthDays.reduce((a, b) => a + b.v, 0) : NaN;
+  const yearKey = String(cn.y);
   const settled = months.filter((x) => x.key.startsWith(yearKey));
   const lastSet = settled.length ? settled[settled.length - 1].key : '';
   let yearTotal = settled.reduce((a, b) => a + b.v, 0);
   if (!settled.length && Number.isFinite(num(info.totalEleNum))) yearTotal = num(info.totalEleNum);
-  uniq.forEach((x) => { if (x.key.startsWith(yearKey) && x.key.slice(0, 6) > lastSet) yearTotal += x.v; });
+  uniq.forEach((x) => { const m6 = x.key.slice(0, 6); if (x.key.startsWith(yearKey) && m6 > lastSet && m6 < ym) yearTotal += x.v; });
+  if (ym.startsWith(yearKey) && ym > lastSet && Number.isFinite(monthUseVal)) yearTotal += monthUseVal;
+
+  const hasUsageData = uniq.length > 0 || months.length > 0 || Number.isFinite(monthUseVal) || yearTotal > 0;
   let tier = null;
-  if (tiers.length >= 2 && yearTotal > 0) {
-    const lv = yearTotal <= tiers[0] ? 1 : yearTotal <= tiers[1] ? 2 : 3;
-    tier = { lv, total: yearTotal, left: lv < 3 ? tiers[lv - 1] - yearTotal : 0, price: !tierEnv ? [0.4883, 0.5383, 0.7883][lv - 1] : NaN };
+  if (tiers.length >= 2 && hasUsageData) {
+    const mBasis = Number.isFinite(monthUseVal) ? monthUseVal : 0;
+    const basis = cycle === 'monthly'
+      ? mBasis
+      : cycle === 'bimonthly'
+        ? mBasis + (lastMonth && Number.isFinite(lastMonth.v) ? lastMonth.v : 0)
+        : yearTotal;
+    if (Number.isFinite(basis) && (basis > 0 || cycle !== 'annual')) {
+      const lv = basis <= tiers[0] ? 1 : basis <= tiers[1] ? 2 : 3;
+      tier = {
+        lv,
+        total: basis,
+        cycle,
+        region: reg.short,
+        left: lv < 3 ? tiers[lv - 1] - basis : 0,
+        price: priceTable.length >= lv ? priceTable[lv - 1] : NaN,
+      };
+    }
   }
+  const flatPrice = !tier && !tiers.length && priceTable.length === 1 ? priceTable[0] : NaN;
   const customPrice = num(envObj.SGCC_PRICE);
+  const hasCustomPrice = Number.isFinite(customPrice) && customPrice > 0;
   const priced = months.filter((x) => x.v > 0 && x.cost > 0).pop();
-  const unitPrice = Number.isFinite(customPrice) && customPrice > 0
+  const unitPrice = hasCustomPrice
     ? customPrice
-    : (priced ? priced.cost / priced.v : (tier && Number.isFinite(tier.price) ? tier.price : 0.4883));
+    : (tier && Number.isFinite(tier.price)
+      ? tier.price
+      : Number.isFinite(flatPrice)
+        ? flatPrice
+        : priced
+          ? priced.cost / priced.v
+          : (priceTable[0] || 0.4883));
   // 预计可用天数：余额 ÷（近 7 天日均电量 × 单价）
   let estDays = num(bill.dayNum);
   if (!Number.isFinite(estDays) && !owe && Number.isFinite(sum) && sum > 0) {
@@ -681,7 +811,6 @@ function parse(acc) {
     const avg = recent.length ? recent.reduce((a, b) => a + b.v, 0) / recent.length : NaN;
     if (avg > 0) estDays = Math.floor(sum / (avg * unitPrice));
   }
-  const monthUseVal = Number.isFinite(num(acc.monthTotal)) ? num(acc.monthTotal) : monthDays.length ? monthDays.reduce((a, b) => a + b.v, 0) : NaN;
   const yesterdayCostVal = last && Number.isFinite(last.cost) && last.cost > 0
     ? last.cost
     : (last && Number.isFinite(last.v) ? last.v * unitPrice : NaN);
@@ -689,6 +818,7 @@ function parse(acc) {
     name: (() => { const n = clean(u.consName_dst || u.consName); return /[:：]/.test(n) || n.length > 12 ? '' : n; })(),
     consNo: clean(u.consNo_dst || u.consNo),
     org: clean(u.orgName),
+    region: reg.short,
     balance: Number.isFinite(sum) ? Math.abs(sum) : NaN,
     owe,
     prepay: num(bill.prepayBal),
@@ -700,12 +830,14 @@ function parse(acc) {
     monthUse: monthUseVal,
     monthCost: Number.isFinite(monthUseVal) ? monthUseVal * unitPrice : NaN,
     unitPrice,
+    customPrice: hasCustomPrice,
+    flatPrice,
     lastMonth,
     yearUse: num(info.totalEleNum),
     yearCost: num(info.totalEleCost),
     tier,
     daily: uniq.slice(-30),
-    months: months.filter((x) => x.key.startsWith(String(now.getFullYear()))),
+    months: months.filter((x) => x.key.startsWith(yearKey)),
     dailyStale: Boolean(acc.dailyStale),
     balStale: Boolean(acc.balStale),
     balTs: num(bill.balTs),
@@ -719,7 +851,7 @@ function friendly(e) {
   if (code === 'LOGIN_BACKOFF' || code === 'LOGIN_BUSY') return msg;
   if (code === 'RK008') return '国网要求安全验证（RK008）：先在官方网上国网 App 登录一次，过几小时再刷新';
   if (code === '0100' || /密码错误/.test(msg)) return '账号或密码错误（连错 5 次会锁 30 分钟），请检查模块里的账号密码';
-  if (/S1009|101009/.test(code) || /系统正忙/.test(msg)) return '国网服务器繁忙（S1009），稍后会自动重试';
+  if (isBusy(e)) return `国网服务器繁忙（S1009${e && e.stage ? '，卡在' + e.stage : ''}），稍后会自动重试`;
   return msg || '查询失败';
 }
 
@@ -741,25 +873,28 @@ async function getData(ctx, force) {
   const sig = md5hex(username + '|' + password + '|' + clean(env.SGCC_SMS));
 
   // 国网每天早间（约 06:00~08:30）跑批结算前一日电费：
-  // 若缓存是今天北京时间 08:30 之前拉取的（如早上 06:19），且当前已满 08:30，则自动视为结算前旧缓存，触发一次刷新
+  // 若缓存是今天北京时间 08:30 之前拉取的（如早上 06:19），且当前已满 08:30，则自动视为结算前旧缓存，触发一次刷新；
+  // 若已过 09:00 但国网最新日用电还没更新到昨天，则将缓存有效期缩短为最多 2 小时以便白天及时追更
   const nowCn = cnNow();
   const today0830 = Date.UTC(nowCn.y, nowCn.m - 1, nowCn.d, 0, 30, 0);
   const isPreSettlementCache = mine && mine.ts && Date.now() >= today0830 && mine.ts < today0830;
 
   const hours = Math.max(1, num(env.SGCC_REFRESH) || 6);
-  if (mine && mine.list && Date.now() - mine.ts < hours * 3600000 && !force && !isPreSettlementCache) {
+  let ttl = hours * 3600000;
+  if (mine && mine.list && nowCn.h >= 9 && latestKey(mine.list) < cnYmdKey(-1)) ttl = Math.min(ttl, 2 * 3600000);
+  if (mine && mine.list && Date.now() - mine.ts < ttl && !force && !isPreSettlementCache) {
     const recentErr = err && err.sig === sig && err.ts > mine.ts ? err.msg : '';
-    console.log(`[SGCC] 命中本地缓存(更新于 ${updText(mine.ts)}，刷新间隔 ${hours}h)${recentErr ? ' | 上次刷新异常: ' + recentErr : ''}`);
+    console.log(`[SGCC] 命中本地缓存(更新于 ${updText(mine.ts)}，有效间隔 ${ttl / 3600000}h)${recentErr ? ' | 上次刷新异常: ' + recentErr : ''}`);
     return { configured: true, cache: mine, error: recentErr };
   }
   if (isPreSettlementCache && !force) {
     console.log(`[SGCC] 检测到缓存(${updText(mine.ts)})早于今日 08:30 国网日结时间，自动触发刷新`);
   }
 
-  // 失败退避：密码错误/设备验证类错误退避 30 分钟（避免锁号）；网络波动等临时错误在非强制刷新时退避 2 分钟
+  // 失败退避：密码错误/设备验证类错误退避 30 分钟（避免锁号）；网络波动等临时错误在同版本非强制刷新时退避 2 分钟
   if (err && err.sig === sig && err.msg) {
     const isAuthLockErr = ['0100', '4006'].includes(String(err.code || '')) || /密码错误|验证新设备/.test(err.msg);
-    const backoffMs = isAuthLockErr ? 30 * 60000 : (force ? 0 : 2 * 60000);
+    const backoffMs = isAuthLockErr ? 30 * 60000 : (force || err.ver !== SG_VER ? 0 : 2 * 60000);
     if (backoffMs > 0 && Date.now() - err.ts < backoffMs) {
       console.log(`[SGCC] 失败退避中(剩余 ${Math.ceil((backoffMs - (Date.now() - err.ts)) / 1000)}s): ${err.msg}`);
       return { configured: true, cache: mine, error: err.msg };
@@ -783,10 +918,10 @@ async function getData(ctx, force) {
     const msg = friendly(e);
     const code = String((e && e.code) || '');
     console.log(`[SGCC] 国网数据拉取失败: [${code}] ${msg}`);
-    const rec = { sig, ts: Date.now(), msg, code };
+    const rec = { sig, ts: Date.now(), msg, code, ver: SG_VER };
     // S1009 持续超过 30 分钟：大概率是登录会话被国网限流，清除会话（保留设备指纹，避免触发陌生设备验证），
     // 下次刷新时重新登录。做法参考 githubdulong/Script 的 SGCC.js「清除缓存」；每 6 小时最多重置一次
-    if (code === 'S1009' || /系统正忙/.test(msg)) {
+    if (isBusy(e)) {
       const prevBusy = err && err.sig === sig && err.s1009Since;
       rec.s1009Since = prevBusy ? err.s1009Since : Date.now();
       rec.resetAt = (err && err.sig === sig && err.resetAt) || 0;
@@ -949,8 +1084,20 @@ function legend(peakText) {
   return row([dot('#30D158'), T('最新', 8, C.faint), dot('#FF9F0A'), T(peakText, 8, C.faint)], { gap: 3 });
 }
 
+const TIER_CN = ['', '一阶', '二阶', '三阶'];
+function fmtPrice(v) { return Number.isFinite(v) ? String(Number(v.toFixed(4))) : ''; }
+
 function header(p, ts, compact) {
   const tail = p.consNo ? `尾号${p.consNo.replace(/\D/g, '').slice(-4) || p.consNo.slice(-4)}` : '';
+  const priceTag = !compact
+    ? (p.customPrice
+      ? `${p.tier ? TIER_CN[p.tier.lv] + '·' : ''}¥${fmtPrice(p.unitPrice)}/度`
+      : p.tier && Number.isFinite(p.tier.price)
+        ? `${TIER_CN[p.tier.lv]}·¥${fmtPrice(p.tier.price)}/度`
+        : Number.isFinite(p.flatPrice)
+          ? `¥${fmtPrice(p.flatPrice)}/度`
+          : '')
+    : '';
   return row([
     { type: 'stack', width: 20, height: 20, borderRadius: 6, backgroundColor: { light: '#00A3A01F', dark: '#00A3A033' }, alignItems: 'center', justifyContent: 'center', children: [icon('bolt.fill', C.brand, 11)] },
     T(compact ? '国家电网' : '网上国网', 12, C.text, 'bold'),
@@ -959,16 +1106,17 @@ function header(p, ts, compact) {
     ...(!compact && p.login ? [T(`账号${p.login}`, 9, C.faint)] : []),
     ...(!compact && p.miss ? [T(`没找到户号 ${p.miss}`, 9, C.warn, 'medium')] : []),
     spacer(),
+    ...(priceTag ? [T(priceTag, 9, C.dim, 'medium')] : []),
     icon('arrow.clockwise', C.faint, 9),
     T(updText(ts), 10, C.dim),
-  ], { gap: 5, height: 20 });
+  ], { gap: 4, height: 20 });
 }
 
-const TIER_CN = ['', '一阶', '二阶', '三阶'];
 function tierText(p, short) {
   const t = p.tier;
   if (!t) return '';
-  if (t.lv >= 3) return short ? '三阶' : `三阶 · 年累计 ${fmt(t.total, 0)} 度`;
+  const cyWord = t.cycle === 'monthly' ? '本月' : t.cycle === 'bimonthly' ? '近两月' : '年累计';
+  if (t.lv >= 3) return short ? '三阶' : `三阶 · ${cyWord} ${fmt(t.total, 0)} 度`;
   return short ? TIER_CN[t.lv] : `${TIER_CN[t.lv]} · 距${TIER_CN[t.lv + 1]} ${fmt(Math.max(0, t.left), 0)} 度`;
 }
 function tierColor(p) { return !p.tier ? C.faint : p.tier.lv === 1 ? C.ok : p.tier.lv === 2 ? C.warn : C.fail; }
@@ -1022,7 +1170,7 @@ function buildSmall(p, r) {
       balanceBlock(p, 22),
       spacer(),
       row([
-        col([T(`昨日 ${mmdd(p.yesterdayKey)}`, 8, C.faint), row([T(fmt(p.yesterday), 13, C.text, 'bold'), T('度', 8, C.dim)], { alignItems: 'end', gap: 1 })], { gap: 0, flex: 1 }),
+        col([T(`${dayWord(p.yesterdayKey)} ${mmdd(p.yesterdayKey)}`, 8, C.faint), row([T(fmt(p.yesterday), 13, C.text, 'bold'), T('度', 8, C.dim)], { alignItems: 'end', gap: 1 })], { gap: 0, flex: 1 }),
         col([row([T('本月', 8, C.faint), ...(p.tier ? [T(tierText(p, true), 8, tierColor(p), 'semibold')] : [])], { gap: 3 }), row([T(fmt(p.monthUse), 13, C.text, 'bold'), T('度', 8, C.dim)], { alignItems: 'end', gap: 1 })], { gap: 0, flex: 1 }),
       ], { gap: 6 }),
       e || flexBars(vals, 20),
@@ -1042,7 +1190,7 @@ function buildMedium(p, r) {
       header(p, r.cache.ts, false),
       row([
         glass([balanceBlock(p, 22)], { padding: [6, 9], borderRadius: 13, width: 104, height: 58, justifyContent: 'center' }),
-        statCell('sun.max.fill', C.warn, '昨日', fmt(p.yesterday), '度', mmdd(p.yesterdayKey)),
+        statCell('sun.max.fill', C.warn, dayWord(p.yesterdayKey), fmt(p.yesterday), '度', mmdd(p.yesterdayKey)),
         statCell('calendar', C.blue, '本月', fmt(p.monthUse), '度', tierText(p), tierColor(p)),
         statCell('clock.arrow.circlepath', '#BF5AF2', '上月', fmt(lm ? lm.v : NaN, 0), '度', lm && Number.isFinite(lm.cost) ? `¥${money(lm.cost)}` : ''),
       ], { gap: 5, height: 58 }),
@@ -1056,13 +1204,13 @@ function buildMedium(p, r) {
 }
 
 function monthBars(p) {
-  const now = new Date();
-  const y = now.getFullYear();
+  const cn = cnNow();
+  const y = cn.y;
   const map = {};
   p.months.forEach((m) => { map[m.key] = m.v; });
   const vals = [];
   for (let i = 1; i <= 12; i += 1) vals.push(map[`${y}${String(i).padStart(2, '0')}`] || 0);
-  return vals.slice(0, Math.max(now.getMonth(), 1));
+  return vals.slice(0, Math.max(cn.m - 1, 1));
 }
 
 function buildLarge(p, r) {
@@ -1080,7 +1228,7 @@ function buildLarge(p, r) {
       row([
         glass([balanceBlock(p, 28)], { padding: [8, 10], borderRadius: 14, flex: 1, height: 110, justifyContent: 'center' }),
         col([
-          row([statCell('sun.max.fill', C.warn, '昨日', fmt(p.yesterday), '度', mmdd(p.yesterdayKey), null, 52),
+          row([statCell('sun.max.fill', C.warn, dayWord(p.yesterdayKey), fmt(p.yesterday), '度', mmdd(p.yesterdayKey), null, 52),
             statCell('calendar', C.blue, '本月', fmt(p.monthUse), '度', tierText(p), tierColor(p), 52)], { gap: 6, height: 52 }),
           row([statCell('clock.arrow.circlepath', '#BF5AF2', '上月', fmt(lm ? lm.v : NaN, 0), '度', lm && Number.isFinite(lm.cost) ? `¥${money(lm.cost)}` : '', null, 52),
             statCell('chart.bar.fill', C.teal, '今年', fmt(p.yearUse, 0), '度', Number.isFinite(p.yearCost) ? `¥${money(p.yearCost)}` : '', null, 52)], { gap: 6, height: 52 }),
@@ -1095,7 +1243,7 @@ function buildLarge(p, r) {
         (() => { const d = dayLabels(list); return { ...flexBars(vals, 34, { labels: d.labels, weekend: d.weekend, strong: d.strong, size: 6 }), padding: [3, 0, 0, 0] }; })(),
       ], { gap: 0, padding: [8, 10], borderRadius: 14, flex: 1 }),
       glass([
-        row([icon('calendar.badge.clock', '#BF5AF2', 10), T(`${new Date().getFullYear()} 年月度用电`, 10, C.text, 'semibold'), spacer(),
+        row([icon('calendar.badge.clock', '#BF5AF2', 10), T(`${cnNow().y} 年月度用电`, 10, C.text, 'semibold'), spacer(),
           T(mv.length ? `共 ${mv.length} 个月` : '暂无', 9, C.dim)], { gap: 4 }),
         flexBars(mv, 28, { top: '#BF5AF2', bottom: '#5E5CE6', latest: '#DA8FFF', labels: mv.map((_, i) => `${i + 1}月`), size: 8 }),
       ], { gap: 4, padding: [8, 10], borderRadius: 14 }),
@@ -1106,8 +1254,9 @@ function buildLarge(p, r) {
 
 function buildLock(p, r, family) {
   const bal = `${p.owe ? '欠' : ''}¥${money(p.balance)}`;
+  const dw = dayWord(p.yesterdayKey);
   if (family === 'accessoryInline') {
-    return { type: 'widget', children: [{ type: 'text', text: `⚡ ${bal} · 昨日 ${fmt(p.yesterday)}度${p.tier ? ' · ' + tierText(p, true) : ''}`, maxLines: 1, minScale: 0.6 }] };
+    return { type: 'widget', children: [{ type: 'text', text: `⚡ ${bal} · ${dw} ${fmt(p.yesterday)}度${p.tier ? ' · ' + tierText(p, true) : ''}`, maxLines: 1, minScale: 0.6 }] };
   }
   if (family === 'accessoryCircular') {
     return {
@@ -1123,7 +1272,7 @@ function buildLock(p, r, family) {
     type: 'widget', padding: [2, 4], gap: 2,
     children: [
       row([{ type: 'image', src: 'sf-symbol:bolt.fill', width: 10, height: 10 }, { type: 'text', text: `电费 ${bal}`, font: { size: 'caption1', weight: 'semibold' } }, spacer()], { gap: 4 }),
-      { type: 'text', text: `昨日 ${fmt(p.yesterday)}度 · 本月 ${fmt(p.monthUse)}度`, font: { size: 'caption2' }, opacity: 0.8, maxLines: 1, minScale: 0.6 },
+      { type: 'text', text: `${dw} ${fmt(p.yesterday)}度 · 本月 ${fmt(p.monthUse)}度`, font: { size: 'caption2' }, opacity: 0.8, maxLines: 1, minScale: 0.6 },
       { type: 'text', text: [Number.isFinite(p.days) ? `可用 ${fmt(p.days, 0)} 天` : `更新 ${updText(r.cache.ts)}`, tierText(p, true)].filter(Boolean).join(' · '), font: { size: 'caption2' }, opacity: 0.7, maxLines: 1, minScale: 0.6 },
     ],
   };
@@ -1191,10 +1340,11 @@ function sendAccountNotify(ctx, r, st, { lowWarn = false } = {}) {
   const balStr = p.owe ? `欠费 ¥${money(p.balance)}` : `¥${money(p.balance)}`;
   const daysStr = Number.isFinite(p.days) ? `（预计可用 ${fmt(p.days, 0)} 天）` : '';
 
+  const yWord = dayWord(p.yesterdayKey);
   const yDate = mmdd(p.yesterdayKey);
   const yCostStr = Number.isFinite(p.yesterdayCost) ? `，电费约 ¥${money(p.yesterdayCost)}` : '';
   const yStr = Number.isFinite(p.yesterday)
-    ? `昨日${yDate ? `（${yDate}）` : ''}用电 ${fmt(p.yesterday)} 度${yCostStr}`
+    ? `${yWord}${yDate ? `（${yDate}）` : ''}用电 ${fmt(p.yesterday)} 度${yCostStr}`
     : '昨日用电暂无数据';
 
   const mCostStr = Number.isFinite(p.monthCost) ? `（约 ¥${money(p.monthCost)}）` : '';
@@ -1350,7 +1500,7 @@ export default async function (ctx) {
   p.login = clean(env.SGCC_USERNAME).slice(-4);
   p.count = r.cache.list.length;
   p.index = r.cache.list.indexOf(acc) + 1;
-  console.log(`[SGCC小组件] 渲染(${family}) | 余额=¥${money(p.balance)}(prepay=${p.prepay}) | 昨日(${p.yesterdayKey})=${fmt(p.yesterday)}度 | 缓存时间=${updText(r.cache.ts)}`);
+  console.log(`[SGCC小组件] 渲染(${family}) | 省份=${p.region || ''}(${p.tier ? TIER_CN[p.tier.lv] : '无阶梯'} ¥${fmtPrice(p.unitPrice)}) | 余额=¥${money(p.balance)}(prepay=${p.prepay}) | ${dayWord(p.yesterdayKey)}(${p.yesterdayKey})=${fmt(p.yesterday)}度 | 缓存时间=${updText(r.cache.ts)}`);
   if (family.startsWith('accessory')) return buildLock(p, r, family);
   if (family === 'systemSmall') return buildSmall(p, r);
   if (family === 'systemMedium') return buildMedium(p, r);
